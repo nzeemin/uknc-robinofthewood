@@ -158,6 +158,33 @@ EXITSC:	; String for screen cleanup before the exit
 	.EVEN
 
 ;------------------------------------------------------------------------------
+; CPU-side vsync (50 Hz) frame counter.  The "vsync in CPU" enable bit in
+; 177054 is already cleared by the PPU init block below, so all that is left is
+; to install the vector and unmask.  VSYCPU bumps FRAMES and returns; the game
+; loop waits on it for frame pacing.
+
+CPUVSY:	MOV	@#100, BKP100		; save whatever was there
+	MOV	@#102, BKP102
+	MOV	#VSYCPU, @#100
+	MOV	#200, @#102
+	CLR	FRAMES
+	MTPS	#0			; let the interrupt through
+	RETURN
+
+CPUVSYD:				; undo, before handing control back
+	MTPS	#340
+	MOV	BKP100, @#100
+	MOV	BKP102, @#102
+	RETURN
+
+VSYCPU:	INC	(PC)+			; counter word sits inline, just past here
+FRAMES:	.WORD	0
+	RTI
+
+BKP100:	.WORD	0
+BKP102:	.WORD	0
+
+;------------------------------------------------------------------------------
 
 ; Channel 2 data
 PPMSG:	.WORD	PPARR

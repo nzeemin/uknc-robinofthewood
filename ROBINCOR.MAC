@@ -827,36 +827,39 @@ DRAWSPRITE:
 	MOV	R1, SPRB1
 	MOV	R3, SPRB2
 ;
-; shift [ b0 : b1 : b2 : 00 ] right by SPRSHF bits into R4 (b0:b1), R5 (b2:00)
+; Place the row at the sub-cell offset.  The pixel data is bit-reversed (bit 0
+; = leftmost pixel), so moving the sprite right on screen is a LEFT shift of
+; the 32-bit field [ 00 : b2 : b1 : b0 ], b0 in the low byte.  R4 = b1:b0,
+; R5 = 00:b2; shift {R5:R4} left by SPRSHF bits.
 ;
 50$:	MOV	SPRB0, R4
-	SWAB	R4
-	BIS	SPRB1, R4		; R4 = b0 : b1
-	MOV	SPRB2, R5
-	SWAB	R5			; R5 = b2 : 00
+	MOV	SPRB1, R0
+	SWAB	R0
+	BIS	R0, R4			; R4 = b1 : b0
+	MOV	SPRB2, R5		; R5 = 00 : b2
 	MOV	SPRSHF, R3
 	BEQ	60$
 52$:	CLC
-	ROR	R4
-	ROR	R5
+	ROL	R4
+	ROL	R5
 	DEC	R3
 	BNE	52$
 ;
-; XOR the four bytes into the shadow row
+; XOR the four output bytes into the shadow row, low end first
 ;
 60$:	MOV	SPRADR, R3
-	MOV	R4, R0
-	SWAB	R0
+	MOV	R4, R0			; o0 = b0, shifted
 	CALL	SPRXOR
 	INC	R3
 	MOV	R4, R0
+	SWAB	R0			; o1 = b1, shifted, + b0 spill
+	CALL	SPRXOR
+	INC	R3
+	MOV	R5, R0			; o2 = b2, shifted, + b1 spill
 	CALL	SPRXOR
 	INC	R3
 	MOV	R5, R0
-	SWAB	R0
-	CALL	SPRXOR
-	INC	R3
-	MOV	R5, R0
+	SWAB	R0			; o3 = b2 spill
 	CALL	SPRXOR
 ;
 	ADD	#PLAYW, SPRADR		; next pixel line
@@ -904,50 +907,223 @@ SPRXOR:
 	RETURN
 
 ;------------------------------------------------------------------------------
+; Robin's state.  A cut-down stand-in for the ZX object record at $CC7C -- just
+; enough for a hand-rolled walker; the full 11-byte record and the $C8F7
+; erase/step/redraw machinery come later.
+
+ROBINX:		.WORD	0	; X in 2-pixel units (the DRAWFRAME / $C6D6 convention)
+ROBINY:		.WORD	0	; Y in pixels, top row of the sprite
+ROBINDIR:	.WORD	0	; last committed direction bit (PKEYLT/RT/UP/DN); 0 = idle
+ROBINMIR:	.WORD	0	; 200 when facing left, else 0 -- ORed into the frame number
+ROBINPH:	.WORD	0	; walk-cycle phase
+ROBINFRM:	.WORD	0	; frame number last drawn, kept for the XOR erase
+TICKODD:	.WORD	0	; flips every frame; Robin advances on every other one
+
+RSPAWNX	= 8. + <12.*4>		; play-area cell column 12., in X units
+RSPAWNY	= 8.*8.			; play-area cell row 8., in pixels
+
+;------------------------------------------------------------------------------
 ; Game entry point, called from START in ROBIN1.MAC.
 
 GAMEMAIN:
 	CALL	RUNPPU			; start the PPU renderer
+	CALL	CPUVSY			; start the vsync frame counter
 ;
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
-; !!TEST!! four actors on the empty lower band -- each should take its own ramp
-; colour with no manual attribute fill
-	MOV	#0, R0			; Robin walk 0 -- green
-	MOV	#L8D80, R1
-	MOV	#16., R2
-	MOV	#96., R3
-	CALL	DRAWFRAME
-	MOV	#0, R0			; guard right 0 -- cyan
-	MOV	#L8DC4, R1
-	MOV	#40., R2
-	MOV	#96., R3
-	CALL	DRAWFRAME
-	MOV	#3, R0			; Bishop frame 0 -- magenta
-	MOV	#L8DEA, R1
-	MOV	#64., R2
-	MOV	#96., R3
-	CALL	DRAWFRAME
-	MOV	#16., R0		; boar frame 0 -- red
-	MOV	#L8DEA, R1
-	MOV	#88., R2
-	MOV	#104., R3
-	CALL	DRAWFRAME
-	CALL	DRAWALL
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
 ;
+	MOV	#RSPAWNX, ROBINX	; drop Robin at a fixed cell for now
+	MOV	#RSPAWNY, ROBINY
+	CLR	ROBINDIR
+	CLR	ROBINMIR
+	CLR	ROBINPH
+	CLR	ROBINFRM
+	CLR	TICKODD
+;
+	MOV	ROBINFRM, R0		; put the idle frame on screen once, so
+	MOV	#L8D80, R1		; MOVEROBIN always has a real frame to erase
+	MOV	ROBINX, R2
+	MOV	ROBINY, R3
+	CALL	DRAWFRAME
+;
 GAMELOOP:
-	;TODO: read input, advance actors, render into the shadow screen
+	MOV	FRAMES, R1		; wait for the next vsync -- one pass per frame
+10$:	CMP	FRAMES, R1
+	BEQ	10$
+;
+	COM	TICKODD			; 0, -1, 0, -1, ...
+	BEQ	20$			; advance Robin on every other frame only
+	CALL	MOVEROBIN
+	CALL	ROOMEDGE		; hand off to the next room at the L/R edge
+20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;
 	MOV	@#PPUKEY, R0
 	BIT	#PKEYST, R0		; STOP key?
 	BEQ	GAMELOOP
 ;
+	CALL	CPUVSYD			; stop the frame counter, remask
 	CALL	STOPPU
 	JMP	FINISH
+
+;------------------------------------------------------------------------------
+; Advance Robin one walk step from the current input.  Hand-rolled stand-in for
+; the ZX chain $C6A2 -> $C95A -> $C9E7/$CD42 -> $C8F7: no cell-boundary
+; alignment gating, no block/attribute collision, no action system yet.  Called
+; on every other frame from GAMELOOP.
+;
+; Erases the current frame (XOR redraw), steps position + facing, advances the
+; walk cycle, draws the new frame.  The input mask lives in memory across the
+; DRAWFRAME calls, which clobber R0-R5.
+
+MRBMSK:		.WORD	0		; this step's direction mask
+
+RSTEPX	= 2.			; X move per step, in 2-pixel units (= 4 px)
+RSTEPY	= 4.			; Y move per step, in pixels
+RMINY	= 8.			; X is left unclamped -- ROOMEDGE handles the sides
+RMAXY	= 116.
+
+MOVEROBIN:
+	CALL	READINPUT		; R0 = direction mask, opposite pairs cancelled
+	BIC	#^C<PKEYLT+PKEYRT+PKEYUP+PKEYDN>, R0
+	MOV	R0, MRBMSK
+	BEQ	90$			; nothing pressed => stand still, keep the frame
+;
+; erase the current frame
+;
+	MOV	ROBINFRM, R0
+	BIS	ROBINMIR, R0
+	MOV	#L8D80, R1
+	MOV	ROBINX, R2
+	MOV	ROBINY, R3
+	CALL	DRAWFRAME
+;
+; step position, and set facing from a horizontal press
+;
+	BIT	#PKEYLT, MRBMSK
+	BEQ	10$
+	MOV	#200, ROBINMIR		; face left
+	SUB	#RSTEPX, ROBINX
+	BR	40$
+10$:	BIT	#PKEYRT, MRBMSK
+	BEQ	20$
+	CLR	ROBINMIR		; face right
+	ADD	#RSTEPX, ROBINX
+	BR	40$
+20$:	BIT	#PKEYUP, MRBMSK
+	BEQ	30$
+	SUB	#RSTEPY, ROBINY
+	BR	40$
+30$:	ADD	#RSTEPY, ROBINY		; must be DOWN
+;
+; clamp Y to the play area (X is handled by ROOMEDGE after the move)
+;
+40$:	CMP	ROBINY, #RMINY
+	BGE	46$
+	MOV	#RMINY, ROBINY
+46$:	CMP	ROBINY, #RMAXY
+	BLE	48$
+	MOV	#RMAXY, ROBINY
+;
+; advance the walk cycle and pick the frame
+;
+48$:	INC	ROBINPH
+	BIC	#^C3, ROBINPH		; phase 0..3
+	MOV	ROBINPH, R0
+	CLR	R1
+	BISB	FRMWALK(R0), R1
+	MOV	R1, ROBINFRM
+;
+; draw the new frame
+;
+	BIS	ROBINMIR, R1
+	MOV	R1, R0
+	MOV	#L8D80, R1
+	MOV	ROBINX, R2
+	MOV	ROBINY, R3
+	CALL	DRAWFRAME
+90$:	RETURN
+
+FRMWALK:	.BYTE	1, 2, 3, 2	; a short run cycle from L8D80's walk frames
+	.EVEN
+
+;------------------------------------------------------------------------------
+; If Robin has walked off an edge, wrap him to the opposite side and step
+; CURROOM to the neighbouring room on the world map, then rebuild the room.
+; The port of the four arms of the ZX edge check at $BFBA and the room step at
+; $C22F.  One edge per call, same as the ZX.
+;
+; CURROOM is a linear world-map index: low nibble = column (0-15, wraps on the
+; row), the rest = row (0-19, wraps).  ZX X and Y units carry straight over:
+; off-left below 11., off-right at 122. (wrap span 110.); off-top below 40.,
+; off-bottom at 112. (re-enter at Y 104. / 48.).
+
+REDGEL	= 11.
+REDGER	= 122.
+REDGEW	= 110.
+REDGET	= 40.
+REDGEB	= 112.
+REDGETY	= 104.			; Y when entering through the top edge
+REDGEBY	= 48.			; Y when entering through the bottom edge
+ROWSTEP	= 20			; octal: one map row in CURROOM (low nibble = column)
+NROWS	= 20.
+
+ROOMEDGE:
+	MOV	ROBINX, R2
+	CMP	R2, #REDGEL
+	BLT	10$			; X < 11. => off the left
+	CMP	R2, #REDGER
+	BLT	20$			; not off a side
+	SUB	#REDGEW, ROBINX		; off the right: wrap to the left side
+	MOV	#1, R3			; column + 1
+	BR	14$
+10$:	ADD	#REDGEW, ROBINX		; off the left: wrap to the right side
+	MOV	#-1, R3			; column - 1
+14$:	MOV	CURROOM, R0
+	MOV	R0, R1
+	BIC	#^C17, R1		; R1 = column
+	ADD	R3, R1
+	BIC	#^C17, R1		; wrap 0..15 (AND 017: -1 -> 15, 16 -> 0)
+	BIC	#17, R0			; R0 = row part
+	BIS	R1, R0
+	BR	80$
+;
+20$:	MOV	ROBINY, R2
+	CMP	R2, #REDGET
+	BLT	30$			; Y < 40. => off the top
+	CMP	R2, #REDGEB
+	BLT	90$			; not off top or bottom
+	MOV	#REDGEBY, ROBINY	; off the bottom: enter from the top, row + 1
+	MOV	CURROOM, R0
+	ADD	#ROWSTEP, R0
+	MOV	R0, R1
+	BIC	#17, R1			; R1 = new row, in place
+	CMP	R1, #NROWS*ROWSTEP
+	BLO	80$			; row < 20 => fine
+	MOV	CURROOM, R0
+	BIC	#^C17, R0		; row wrapped past 19 => row 0, same column
+	BR	80$
+30$:	MOV	#REDGETY, ROBINY	; off the top: enter from the bottom, row - 1
+	MOV	CURROOM, R0
+	SUB	#ROWSTEP, R0
+	BCC	80$			; no borrow => row stayed >= 0
+	MOV	CURROOM, R0
+	BIC	#^C17, R0		; row was 0 => wrap to the last row, same column
+	ADD	#<NROWS-1>*ROWSTEP, R0
+;
+80$:	MOV	R0, CURROOM
+	CALL	ENTERROOM		; clears the shadow screen and redraws the room
+;
+	MOV	ROBINFRM, R0		; put Robin back on the fresh room
+	BIS	ROBINMIR, R0
+	MOV	#L8D80, R1
+	MOV	ROBINX, R2
+	MOV	ROBINY, R3
+	CALL	DRAWFRAME
+90$:	RETURN
 
 ;------------------------------------------------------------------------------
 ; Sprite frame pointer table, ZX $8D80 -- 73. words, one per animation frame.
