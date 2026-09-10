@@ -1,0 +1,978 @@
+;------------------------------------------------------------------------------
+; ROBINRMX.MAC -- additional room elements.
+;
+; Ported verbatim from the ZX original, $8511-$8A36.  Labels keep the original
+; addresses: L<hex address>.
+;
+; Indexed by room number, not by room type: 256. entries, rooms $00-$FF, in
+; order.  Entry format matches the room type descriptors at L7B39 -- a token
+; count byte followed by that many 2-byte tokens (coordinate byte + block
+; number).  A count of 000 means the room has no additional elements.
+;
+; Entries are variable length and packed sequentially with no fixed stride, so
+; reaching entry N means walking forward from L8511 summing 2*count+1 for each
+; preceding entry -- what the ZX routine at $C1C1 does.
+;
+; Only rooms $0000-$00FF have entries here.  $C072 returns early when the room
+; number's high byte is non-zero, so rooms $0100-$013D get room type graphics
+; only.
+;------------------------------------------------------------------------------
+
+; Room $00
+L8511:	.BYTE	000				; 0. tokens
+
+; Room $01
+L8512:	.BYTE	000				; 0. tokens
+
+; Room $02
+L8513:	.BYTE	000				; 0. tokens
+
+; Room $03
+L8514:	.BYTE	000				; 0. tokens
+
+; Room $04
+L8515:	.BYTE	001				; 1. token
+	.BYTE	124,114
+
+; Room $05
+L8518:	.BYTE	000				; 0. tokens
+
+; Room $06
+L8519:	.BYTE	001				; 1. token
+	.BYTE	124,317
+
+; Room $07
+L851C:	.BYTE	000				; 0. tokens
+
+; Room $08
+L851D:	.BYTE	000				; 0. tokens
+
+; Room $09
+L851E:	.BYTE	000				; 0. tokens
+
+; Room $0A
+L851F:	.BYTE	000				; 0. tokens
+
+; Room $0B
+L8520:	.BYTE	000				; 0. tokens
+
+; Room $0C
+L8521:	.BYTE	000				; 0. tokens
+
+; Room $0D
+L8522:	.BYTE	001				; 1. token
+	.BYTE	160,007
+
+; Room $0E
+L8525:	.BYTE	003				; 3. tokens
+	.BYTE	132,114,103,117,160,007
+
+; Room $0F
+L852C:	.BYTE	000				; 0. tokens
+
+; Room $10
+L852D:	.BYTE	000				; 0. tokens
+
+; Room $11
+L852E:	.BYTE	000				; 0. tokens
+
+; Room $12
+L852F:	.BYTE	000				; 0. tokens
+
+; Room $13
+L8530:	.BYTE	000				; 0. tokens
+
+; Room $14
+L8531:	.BYTE	002				; 2. tokens
+	.BYTE	122,114,143,117
+
+; Room $15
+L8536:	.BYTE	000				; 0. tokens
+
+; Room $16
+L8537:	.BYTE	000				; 0. tokens
+
+; Room $17
+L8538:	.BYTE	000				; 0. tokens
+
+; Room $18
+L8539:	.BYTE	000				; 0. tokens
+
+; Room $19
+L853A:	.BYTE	000				; 0. tokens
+
+; Room $1A
+L853B:	.BYTE	000				; 0. tokens
+
+; Room $1B
+L853C:	.BYTE	002				; 2. tokens
+	.BYTE	121,207,140,015
+
+; Room $1C
+L8541:	.BYTE	002				; 2. tokens
+	.BYTE	132,117,111,114
+
+; Room $1D
+L8546:	.BYTE	000				; 0. tokens
+
+; Room $1E
+L8547:	.BYTE	000				; 0. tokens
+
+; Room $1F
+L8548:	.BYTE	000				; 0. tokens
+
+; Room $20
+L8549:	.BYTE	000				; 0. tokens
+
+; Room $21
+L854A:	.BYTE	001				; 1. token
+	.BYTE	125,117
+
+; Room $22
+L854D:	.BYTE	000				; 0. tokens
+
+; Room $23
+L854E:	.BYTE	002				; 2. tokens
+	.BYTE	115,117,134,117
+
+; Room $24
+L8553:	.BYTE	000				; 0. tokens
+
+; Room $25
+L8554:	.BYTE	002				; 2. tokens
+	.BYTE	115,117,144,114
+
+; Room $26
+L8559:	.BYTE	000				; 0. tokens
+
+; Room $27
+L855A:	.BYTE	000				; 0. tokens
+
+; Room $28
+L855B:	.BYTE	003				; 3. tokens
+	.BYTE	117,317,146,117,157,200
+
+; Room $29
+L8562:	.BYTE	002				; 2. tokens
+	.BYTE	137,117,106,317
+
+; Room $2A
+L8567:	.BYTE	000				; 0. tokens
+
+; Room $2B
+L8568:	.BYTE	000				; 0. tokens
+
+; Room $2C
+L8569:	.BYTE	000				; 0. tokens
+
+; Room $2D
+L856A:	.BYTE	000				; 0. tokens
+
+; Room $2E
+L856B:	.BYTE	001				; 1. token
+	.BYTE	125,114
+
+; Room $2F
+L856E:	.BYTE	000				; 0. tokens
+
+; Room $30
+L856F:	.BYTE	000				; 0. tokens
+
+; Room $31
+L8570:	.BYTE	000				; 0. tokens
+
+; Room $32
+L8571:	.BYTE	000				; 0. tokens
+
+; Room $33
+L8572:	.BYTE	000				; 0. tokens
+
+; Room $34
+L8573:	.BYTE	000				; 0. tokens
+
+; Room $35
+L8574:	.BYTE	002				; 2. tokens
+	.BYTE	131,207,120,011
+
+; Room $36
+L8579:	.BYTE	005				; 5. tokens
+	.BYTE	201,105,073,071,110,074,160,274
+	.BYTE	140,075
+
+; Room $37
+L8584:	.BYTE	002				; 2. tokens
+	.BYTE	140,274,100,074
+
+; Room $38
+L8589:	.BYTE	005				; 5. tokens
+	.BYTE	147,074,107,274,140,274,110,274
+	.BYTE	070,273
+
+; Room $39
+L8594:	.BYTE	002				; 2. tokens
+	.BYTE	147,074,107,274
+
+; Room $3A
+L8599:	.BYTE	000				; 0. tokens
+
+; Room $3B
+L859A:	.BYTE	003				; 3. tokens
+	.BYTE	140,074,110,274,100,275
+
+; Room $3C
+L85A1:	.BYTE	011				; 9. tokens
+	.BYTE	026,321,046,322,056,323,051,123
+	.BYTE	031,121,032,300,021,276,140,074
+	.BYTE	100,274
+
+; Room $3D
+L85B4:	.BYTE	021				; 17. tokens
+	.BYTE	031,121,051,123,023,121,043,122
+	.BYTE	053,123,054,323,044,322,024,321
+	.BYTE	056,321,076,323,016,074,206,107
+	.BYTE	077,073,137,073,127,076,167,274
+	.BYTE	071,075
+
+; Room $3E
+L85D7:	.BYTE	003				; 3. tokens
+	.BYTE	151,207,140,214,120,001
+
+; Room $3F
+L85DE:	.BYTE	001				; 1. token
+	.BYTE	123,010
+
+; Room $40
+L85E1:	.BYTE	000				; 0. tokens
+
+; Room $41
+L85E2:	.BYTE	000				; 0. tokens
+
+; Room $42
+L85E3:	.BYTE	000				; 0. tokens
+
+; Room $43
+L85E4:	.BYTE	000				; 0. tokens
+
+; Room $44
+L85E5:	.BYTE	000				; 0. tokens
+
+; Room $45
+L85E6:	.BYTE	002				; 2. tokens
+	.BYTE	166,007,127,016
+
+; Room $46
+L85EB:	.BYTE	004				; 4. tokens
+	.BYTE	201,105,200,101,140,074,100,274
+
+; Room $47
+L85F4:	.BYTE	004				; 4. tokens
+	.BYTE	074,271,140,274,100,074,100,076
+
+; Room $48
+L85FD:	.BYTE	003				; 3. tokens
+	.BYTE	147,074,117,074,107,075
+
+; Room $49
+L8604:	.BYTE	004				; 4. tokens
+	.BYTE	110,300,160,077,120,074,100,076
+
+; Room $4A
+L860D:	.BYTE	012				; 10. tokens
+	.BYTE	147,274,127,073,107,275,026,121
+	.BYTE	046,122,056,123,051,323,021,122
+	.BYTE	031,321,001,121
+
+; Room $4B
+L8622:	.BYTE	006				; 6. tokens
+	.BYTE	026,121,046,122,056,123,051,323
+	.BYTE	041,322,021,321
+
+; Room $4C
+L862F:	.BYTE	012				; 10. tokens
+	.BYTE	010,323,000,121,012,121,032,122
+	.BYTE	042,123,033,123,013,121,053,076
+	.BYTE	002,276,077,302
+
+; Room $4D
+L8644:	.BYTE	017				; 15. tokens
+	.BYTE	206,107,167,074,127,074,051,274
+	.BYTE	001,121,021,122,031,123,034,323
+	.BYTE	033,123,023,122,024,322,003,121
+	.BYTE	004,321,026,074,066,071
+
+; Room $4E
+L8663:	.BYTE	002				; 2. tokens
+	.BYTE	130,114,141,207
+
+; Room $4F
+L8668:	.BYTE	000				; 0. tokens
+
+; Room $50
+L8669:	.BYTE	000				; 0. tokens
+
+; Room $51
+L866A:	.BYTE	002				; 2. tokens
+	.BYTE	073,114,134,117
+
+; Room $52
+L866F:	.BYTE	000				; 0. tokens
+
+; Room $53
+L8670:	.BYTE	000				; 0. tokens
+
+; Room $54
+L8671:	.BYTE	000				; 0. tokens
+
+; Room $55
+L8672:	.BYTE	003				; 3. tokens
+	.BYTE	147,206,107,317,136,117
+
+; Room $56
+L8679:	.BYTE	010				; 8. tokens
+	.BYTE	107,101,127,100,147,075,167,277
+	.BYTE	207,301,140,074,110,274,100,275
+
+; Room $57
+L868A:	.BYTE	003				; 3. tokens
+	.BYTE	100,075,120,074,160,275
+
+; Room $58
+L8691:	.BYTE	004				; 4. tokens
+	.BYTE	167,075,147,077,107,274,107,076
+
+; Room $59
+L869A:	.BYTE	000				; 0. tokens
+
+; Room $5A
+L869B:	.BYTE	012				; 10. tokens
+	.BYTE	107,073,147,073,137,076,177,076
+	.BYTE	043,323,032,123,052,123,003,274
+	.BYTE	000,273,012,077
+
+; Room $5B
+L86B0:	.BYTE	007				; 7. tokens
+	.BYTE	117,076,147,074,127,075,026,074
+	.BYTE	017,274,016,276,057,276
+
+; Room $5C
+L86BF:	.BYTE	015				; 13. tokens
+	.BYTE	117,073,107,276,147,274,120,074
+	.BYTE	160,077,100,277,023,074,003,275
+	.BYTE	012,121,032,122,042,123,000,322
+	.BYTE	010,323
+
+; Room $5D
+L86DA:	.BYTE	010				; 8. tokens
+	.BYTE	110,273,140,074,100,076,017,323
+	.BYTE	007,121,167,074,137,274,107,073
+
+; Room $5E
+L86EB:	.BYTE	002				; 2. tokens
+	.BYTE	127,010,136,114
+
+; Room $5F
+L86F0:	.BYTE	001				; 1. token
+	.BYTE	114,117
+
+; Room $60
+L86F3:	.BYTE	003				; 3. tokens
+	.BYTE	142,114,121,117,130,317
+
+; Room $61
+L86FA:	.BYTE	000				; 0. tokens
+
+; Room $62
+L86FB:	.BYTE	000				; 0. tokens
+
+; Room $63
+L86FC:	.BYTE	000				; 0. tokens
+
+; Room $64
+L86FD:	.BYTE	001				; 1. token
+	.BYTE	115,120
+
+; Room $65
+L8700:	.BYTE	007				; 7. tokens
+	.BYTE	041,103,021,103,001,102,050,101
+	.BYTE	040,300,020,300,000,100
+
+; Room $66
+L870F:	.BYTE	002				; 2. tokens
+	.BYTE	207,277,206,107
+
+; Room $67
+L8714:	.BYTE	004				; 4. tokens
+	.BYTE	147,074,117,274,107,075,075,071
+
+; Room $68
+L871D:	.BYTE	006				; 6. tokens
+	.BYTE	140,274,110,074,100,075,117,074
+	.BYTE	157,073,107,075
+
+; Room $69
+L872A:	.BYTE	000				; 0. tokens
+
+; Room $6A
+L872B:	.BYTE	003				; 3. tokens
+	.BYTE	147,074,127,073,107,073
+
+; Room $6B
+L8732:	.BYTE	007				; 7. tokens
+	.BYTE	011,074,017,274,051,076,057,276
+	.BYTE	012,121,032,122,042,123
+
+; Room $6C
+L8741:	.BYTE	007				; 7. tokens
+	.BYTE	000,123,020,276,002,274,013,273
+	.BYTE	042,275,053,123,043,321
+
+; Room $6D
+L8750:	.BYTE	004				; 4. tokens
+	.BYTE	200,101,201,105,007,121,017,323
+
+; Room $6E
+L8759:	.BYTE	004				; 4. tokens
+	.BYTE	007,303,037,302,057,302,067,303
+
+; Room $6F
+L8762:	.BYTE	004				; 4. tokens
+	.BYTE	077,114,137,117,105,320,116,014
+
+; Room $70
+L876B:	.BYTE	000				; 0. tokens
+
+; Room $71
+L876C:	.BYTE	000				; 0. tokens
+
+; Room $72
+L876D:	.BYTE	000				; 0. tokens
+
+; Room $73
+L876E:	.BYTE	004				; 4. tokens
+	.BYTE	102,314,143,117,124,114,073,317
+
+; Room $74
+L8777:	.BYTE	000				; 0. tokens
+
+; Room $75
+L8778:	.BYTE	002				; 2. tokens
+	.BYTE	120,117,141,114
+
+; Room $76
+L877D:	.BYTE	010				; 8. tokens
+	.BYTE	110,300,100,276,130,274,170,275
+	.BYTE	210,076,201,105,147,074,107,074
+
+; Room $77
+L878E:	.BYTE	003				; 3. tokens
+	.BYTE	147,074,117,074,077,073
+
+; Room $78
+L8795:	.BYTE	000				; 0. tokens
+
+; Room $79
+L8796:	.BYTE	001				; 1. token
+	.BYTE	103,120
+
+; Room $7A
+L8799:	.BYTE	011				; 9. tokens
+	.BYTE	100,075,120,274,150,273,017,121
+	.BYTE	016,321,037,122,036,322,047,123
+	.BYTE	046,323
+
+; Room $7B
+L87AC:	.BYTE	013				; 11. tokens
+	.BYTE	001,074,031,274,051,071,024,274
+	.BYTE	004,075,026,074,066,075,066,071
+	.BYTE	003,121,023,122,033,123
+
+; Room $7C
+L87C3:	.BYTE	005				; 5. tokens
+	.BYTE	016,074,017,075,037,121,047,323
+	.BYTE	056,076
+
+; Room $7D
+L87CE:	.BYTE	005				; 5. tokens
+	.BYTE	107,100,167,074,137,073,127,076
+	.BYTE	007,073
+
+; Room $7E
+L87D9:	.BYTE	003				; 3. tokens
+	.BYTE	127,117,067,317,136,114
+
+; Room $7F
+L87E0:	.BYTE	001				; 1. token
+	.BYTE	073,016
+
+; Room $80
+L87E3:	.BYTE	002				; 2. tokens
+	.BYTE	133,117,104,317
+
+; Room $81
+L87E8:	.BYTE	000				; 0. tokens
+
+; Room $82
+L87E9:	.BYTE	000				; 0. tokens
+
+; Room $83
+L87EA:	.BYTE	000				; 0. tokens
+
+; Room $84
+L87EB:	.BYTE	000				; 0. tokens
+
+; Room $85
+L87EC:	.BYTE	002				; 2. tokens
+	.BYTE	147,117,126,317
+
+; Room $86
+L87F1:	.BYTE	004				; 4. tokens
+	.BYTE	107,274,157,073,147,276,207,075
+
+; Room $87
+L87FA:	.BYTE	002				; 2. tokens
+	.BYTE	140,074,110,274
+
+; Room $88
+L87FF:	.BYTE	003				; 3. tokens
+	.BYTE	140,074,120,273,100,075
+
+; Room $89
+L8806:	.BYTE	003				; 3. tokens
+	.BYTE	147,074,127,073,107,275
+
+; Room $8A
+L880D:	.BYTE	016				; 14. tokens
+	.BYTE	140,074,110,273,100,076,031,274
+	.BYTE	071,277,023,074,063,076,024,121
+	.BYTE	044,122,056,323,054,123,046,322
+	.BYTE	026,321,076,071
+
+; Room $8B
+L882A:	.BYTE	002				; 2. tokens
+	.BYTE	003,123,023,276
+
+; Room $8C
+L882F:	.BYTE	015				; 13. tokens
+	.BYTE	066,071,051,071,026,074,035,276
+	.BYTE	034,123,024,122,004,121,003,077
+	.BYTE	023,075,043,276,054,276,011,121
+	.BYTE	031,123
+
+; Room $8D
+L884A:	.BYTE	013				; 11. tokens
+	.BYTE	107,074,147,073,177,073,206,107
+	.BYTE	002,074,042,077,013,321,033,322
+	.BYTE	043,323,000,123,020,276
+
+; Room $8E
+L8861:	.BYTE	002				; 2. tokens
+	.BYTE	121,317,140,314
+
+; Room $8F
+L8866:	.BYTE	000				; 0. tokens
+
+; Room $90
+L8867:	.BYTE	000				; 0. tokens
+
+; Room $91
+L8868:	.BYTE	002				; 2. tokens
+	.BYTE	140,216,121,207
+
+; Room $92
+L886D:	.BYTE	003				; 3. tokens
+	.BYTE	146,007,147,211,127,214
+
+; Room $93
+L8874:	.BYTE	000				; 0. tokens
+
+; Room $94
+L8875:	.BYTE	000				; 0. tokens
+
+; Room $95
+L8876:	.BYTE	002				; 2. tokens
+	.BYTE	116,010,147,017
+
+; Room $96
+L887B:	.BYTE	004				; 4. tokens
+	.BYTE	206,305,177,073,137,074,107,074
+
+; Room $97
+L8884:	.BYTE	000				; 0. tokens
+
+; Room $98
+L8885:	.BYTE	002				; 2. tokens
+	.BYTE	147,074,117,274
+
+; Room $99
+L888A:	.BYTE	002				; 2. tokens
+	.BYTE	100,274,140,074
+
+; Room $9A
+L888F:	.BYTE	000				; 0. tokens
+
+; Room $9B
+L8890:	.BYTE	002				; 2. tokens
+	.BYTE	147,074,117,274
+
+; Room $9C
+L8895:	.BYTE	007				; 7. tokens
+	.BYTE	100,075,140,274,120,273,107,100
+	.BYTE	127,073,157,073,003,074
+
+; Room $9D
+L88A4:	.BYTE	021				; 17. tokens
+	.BYTE	110,101,130,077,150,276,160,074
+	.BYTE	107,274,137,275,157,076,157,100
+	.BYTE	100,276,013,321,033,322,043,323
+	.BYTE	000,123,020,077,012,073,042,075
+	.BYTE	002,276
+
+; Room $9E
+L88C7:	.BYTE	002				; 2. tokens
+	.BYTE	140,117,121,317
+
+; Room $9F
+L88CC:	.BYTE	003				; 3. tokens
+	.BYTE	112,114,123,117,111,214
+
+; Room $A0
+L88D3:	.BYTE	000				; 0. tokens
+
+; Room $A1
+L88D4:	.BYTE	000				; 0. tokens
+
+; Room $A2
+L88D5:	.BYTE	000				; 0. tokens
+
+; Room $A3
+L88D6:	.BYTE	001				; 1. token
+	.BYTE	104,117
+
+; Room $A4
+L88D9:	.BYTE	000				; 0. tokens
+
+; Room $A5
+L88DA:	.BYTE	004				; 4. tokens
+	.BYTE	066,010,117,017,126,216,157,007
+
+; Room $A6
+L88E3:	.BYTE	006				; 6. tokens
+	.BYTE	100,300,120,101,140,274,200,075
+	.BYTE	201,105,074,071
+
+; Room $A7
+L88F0:	.BYTE	003				; 3. tokens
+	.BYTE	147,274,127,073,107,275
+
+; Room $A8
+L88F7:	.BYTE	006				; 6. tokens
+	.BYTE	147,074,117,074,107,075,140,074
+	.BYTE	120,273,100,075
+
+; Room $A9
+L8904:	.BYTE	002				; 2. tokens
+	.BYTE	147,274,107,274
+
+; Room $AA
+L8909:	.BYTE	000				; 0. tokens
+
+; Room $AB
+L890A:	.BYTE	003				; 3. tokens
+	.BYTE	107,077,147,074,127,075
+
+; Room $AC
+L8911:	.BYTE	013				; 11. tokens
+	.BYTE	100,273,140,074,120,277,011,121
+	.BYTE	031,122,012,121,032,122,041,123
+	.BYTE	042,123,017,074,057,076
+
+; Room $AD
+L8928:	.BYTE	006				; 6. tokens
+	.BYTE	206,107,167,074,137,274,107,073
+	.BYTE	003,123,023,276
+
+; Room $AE
+L8935:	.BYTE	002				; 2. tokens
+	.BYTE	151,117,120,117
+
+; Room $AF
+L893A:	.BYTE	000				; 0. tokens
+
+; Room $B0
+L893B:	.BYTE	003				; 3. tokens
+	.BYTE	075,317,116,317,147,114
+
+; Room $B1
+L8942:	.BYTE	002				; 2. tokens
+	.BYTE	133,117,104,117
+
+; Room $B2
+L8947:	.BYTE	000				; 0. tokens
+
+; Room $B3
+L8948:	.BYTE	000				; 0. tokens
+
+; Room $B4
+L8949:	.BYTE	000				; 0. tokens
+
+; Room $B5
+L894A:	.BYTE	000				; 0. tokens
+
+; Room $B6
+L894B:	.BYTE	001				; 1. token
+	.BYTE	122,117
+
+; Room $B7
+L894E:	.BYTE	000				; 0. tokens
+
+; Room $B8
+L894F:	.BYTE	000				; 0. tokens
+
+; Room $B9
+L8950:	.BYTE	006				; 6. tokens
+	.BYTE	112,010,113,120,116,317,133,114
+	.BYTE	127,017,157,007
+
+; Room $BA
+L895D:	.BYTE	002				; 2. tokens
+	.BYTE	137,114,106,007
+
+; Room $BB
+L8962:	.BYTE	007				; 7. tokens
+	.BYTE	135,010,104,216,065,010,041,112
+	.BYTE	042,113,012,111,011,110
+
+; Room $BC
+L8971:	.BYTE	000				; 0. tokens
+
+; Room $BD
+L8972:	.BYTE	000				; 0. tokens
+
+; Room $BE
+L8973:	.BYTE	004				; 4. tokens
+	.BYTE	124,117,133,317,112,117,111,320
+
+; Room $BF
+L897C:	.BYTE	002				; 2. tokens
+	.BYTE	137,117,116,317
+
+; Room $C0
+L8981:	.BYTE	000				; 0. tokens
+
+; Room $C1
+L8982:	.BYTE	000				; 0. tokens
+
+; Room $C2
+L8983:	.BYTE	002				; 2. tokens
+	.BYTE	146,007,127,010
+
+; Room $C3
+L8988:	.BYTE	003				; 3. tokens
+	.BYTE	127,114,156,117,167,317
+
+; Room $C4
+L898F:	.BYTE	000				; 0. tokens
+
+; Room $C5
+L8990:	.BYTE	000				; 0. tokens
+
+; Room $C6
+L8991:	.BYTE	000				; 0. tokens
+
+; Room $C7
+L8992:	.BYTE	004				; 4. tokens
+	.BYTE	142,007,134,207,073,114,133,014
+
+; Room $C8
+L899B:	.BYTE	001				; 1. token
+	.BYTE	105,010
+
+; Room $C9
+L899E:	.BYTE	002				; 2. tokens
+	.BYTE	146,114,127,016
+
+; Room $CA
+L89A3:	.BYTE	002				; 2. tokens
+	.BYTE	146,117,127,216
+
+; Room $CB
+L89A8:	.BYTE	000				; 0. tokens
+
+; Room $CC
+L89A9:	.BYTE	000				; 0. tokens
+
+; Room $CD
+L89AA:	.BYTE	000				; 0. tokens
+
+; Room $CE
+L89AB:	.BYTE	002				; 2. tokens
+	.BYTE	113,317,124,216
+
+; Room $CF
+L89B0:	.BYTE	000				; 0. tokens
+
+; Room $D0
+L89B1:	.BYTE	000				; 0. tokens
+
+; Room $D1
+L89B2:	.BYTE	003				; 3. tokens
+	.BYTE	107,016,147,017,076,114
+
+; Room $D2
+L89B9:	.BYTE	003				; 3. tokens
+	.BYTE	140,114,111,117,122,014
+
+; Room $D3
+L89C0:	.BYTE	000				; 0. tokens
+
+; Room $D4
+L89C1:	.BYTE	000				; 0. tokens
+
+; Room $D5
+L89C2:	.BYTE	000				; 0. tokens
+
+; Room $D6
+L89C3:	.BYTE	000				; 0. tokens
+
+; Room $D7
+L89C4:	.BYTE	000				; 0. tokens
+
+; Room $D8
+L89C5:	.BYTE	000				; 0. tokens
+
+; Room $D9
+L89C6:	.BYTE	000				; 0. tokens
+
+; Room $DA
+L89C7:	.BYTE	001				; 1. token
+	.BYTE	113,114
+
+; Room $DB
+L89CA:	.BYTE	001				; 1. token
+	.BYTE	134,117
+
+; Room $DC
+L89CD:	.BYTE	000				; 0. tokens
+
+; Room $DD
+L89CE:	.BYTE	002				; 2. tokens
+	.BYTE	156,007,127,010
+
+; Room $DE
+L89D3:	.BYTE	002				; 2. tokens
+	.BYTE	116,010,147,117
+
+; Room $DF
+L89D8:	.BYTE	002				; 2. tokens
+	.BYTE	112,216,133,017
+
+; Room $E0
+L89DD:	.BYTE	000				; 0. tokens
+
+; Room $E1
+L89DE:	.BYTE	000				; 0. tokens
+
+; Room $E2
+L89DF:	.BYTE	003				; 3. tokens
+	.BYTE	124,114,113,117,142,314
+
+; Room $E3
+L89E6:	.BYTE	002				; 2. tokens
+	.BYTE	137,117,126,114
+
+; Room $E4
+L89EB:	.BYTE	007				; 7. tokens
+	.BYTE	150,207,111,114,075,114,147,114
+	.BYTE	117,007,120,217,116,017
+
+; Room $E5
+L89FA:	.BYTE	002				; 2. tokens
+	.BYTE	137,010,156,007
+
+; Room $E6
+L89FF:	.BYTE	000				; 0. tokens
+
+; Room $E7
+L8A00:	.BYTE	000				; 0. tokens
+
+; Room $E8
+L8A01:	.BYTE	000				; 0. tokens
+
+; Room $E9
+L8A02:	.BYTE	001				; 1. token
+	.BYTE	112,117
+
+; Room $EA
+L8A05:	.BYTE	000				; 0. tokens
+
+; Room $EB
+L8A06:	.BYTE	001				; 1. token
+	.BYTE	124,117
+
+; Room $EC
+L8A09:	.BYTE	000				; 0. tokens
+
+; Room $ED
+L8A0A:	.BYTE	000				; 0. tokens
+
+; Room $EE
+L8A0B:	.BYTE	000				; 0. tokens
+
+; Room $EF
+L8A0C:	.BYTE	000				; 0. tokens
+
+; Room $F0
+L8A0D:	.BYTE	000				; 0. tokens
+
+; Room $F1
+L8A0E:	.BYTE	000				; 0. tokens
+
+; Room $F2
+L8A0F:	.BYTE	001				; 1. token
+	.BYTE	124,317
+
+; Room $F3
+L8A12:	.BYTE	000				; 0. tokens
+
+; Room $F4
+L8A13:	.BYTE	000				; 0. tokens
+
+; Room $F5
+L8A14:	.BYTE	002				; 2. tokens
+	.BYTE	132,117,123,114
+
+; Room $F6
+L8A19:	.BYTE	001				; 1. token
+	.BYTE	127,010
+
+; Room $F7
+L8A1C:	.BYTE	002				; 2. tokens
+	.BYTE	140,207,120,014
+
+; Room $F8
+L8A21:	.BYTE	002				; 2. tokens
+	.BYTE	125,114,114,014
+
+; Room $F9
+L8A26:	.BYTE	000				; 0. tokens
+
+; Room $FA
+L8A27:	.BYTE	000				; 0. tokens
+
+; Room $FB
+L8A28:	.BYTE	000				; 0. tokens
+
+; Room $FC
+L8A29:	.BYTE	002				; 2. tokens
+	.BYTE	122,114,143,117
+
+; Room $FD
+L8A2E:	.BYTE	000				; 0. tokens
+
+; Room $FE
+L8A2F:	.BYTE	003				; 3. tokens
+	.BYTE	000,000,000,020,030,043
+
+; Room $FF
+L8A36:	.BYTE	000				; 0. tokens
+

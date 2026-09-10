@@ -1,0 +1,286 @@
+;------------------------------------------------------------------------------
+; ROBININD.MAC -- HUD icons, message icons, ornaments and screen messages.
+;
+; Ported verbatim from the ZX original, $B434-$B8FA.  Labels keep the original
+; addresses: L<hex address>.
+;
+; These are not bitmaps: each entry is a message for the text printer at $D6AB
+; -- a run of font glyph codes (see ROBINFNT.MAC) interleaved with position and
+; attribute bytes, terminated by 000.  The artwork itself lives in the font, in
+; the custom glyph codes above 140.  Codes 040-137 are literal ASCII, so text
+; runs are kept as .ASCII and the position/attribute runs as .BYTE.
+;
+; Most entries are reached as message indices through the table at $D7CE; a few
+; are printed by direct address instead.
+;
+; Some entries begin with a packed position word that $D619 dereferences rather
+; than glyph data -- LB51F, LB52D and LB663 all do, so their real glyphs start
+; 2 bytes later.
+;------------------------------------------------------------------------------
+
+; Odin logo (custom font glyphs), message index $0F in $D7CE
+LB434:	.BYTE	100,040,311,312,313,314,315,316
+	.BYTE	317,317,320,040,001,040,321,322
+	.BYTE	323,324,325,326,327,330,331,040
+	.BYTE	001,332,333,334,335,336,337,340
+	.BYTE	341,342,333,343,001,344,345,346
+	.BYTE	347,350,351,352,353,354,355,356
+	.BYTE	000,104,104,104,104,104,104,104
+	.BYTE	104,104,104,104,377,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	377,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,377,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	000
+
+; Sword icon (custom font glyphs), for $D7F3's type-$00 trigger and the Ent's sword sale ($DF03)
+LB495:	.BYTE	130,260,171,172,173,174,174,174
+	.BYTE	175,001,176,177,200,201,201,201
+	.BYTE	202,000,106,006,006,105,105,105
+	.BYTE	105,377,106,102,006,105,105,105
+	.BYTE	105,000,000
+
+; Sword icon (custom font glyphs), message index $00 in $D7CE
+LB4B8:	.BYTE	000
+	.BYTE	270,271,272
+	.BYTE	000
+	.BYTE	104,106,106,000
+
+; Bow icon (custom font glyphs), for $D7F3's type-$03 trigger and the Ent's bow sale ($DF03)
+LB4C1:	.BYTE	130,240,203,204,205,206,205,205
+	.BYTE	205,002,204,203,003,001,207,210
+	.BYTE	211,212,213,214,002,211,210,207
+	.BYTE	003,001,040,040,040,040,215,216
+	.BYTE	040,040,040,000,006,105,105,004
+	.BYTE	105,105,105,105,006,377,006,006
+	.BYTE	006,004,004,004,006,006,006,377
+	.BYTE	006,006,006,105,105,004,005,006
+	.BYTE	006,000,000
+
+; Unknown icon (bow?), message index $03 in $D7CE
+LB504:	.BYTE	000,273,274,275,276,277,000,106
+	.BYTE	106,104,106,106,000,000
+
+; Bag-of-money icon (custom font glyphs), for event status $02
+LB512:	.BYTE	000,217,220,001,221,222,000,006
+	.BYTE	106,377,006,106,000
+
+; Archer icon (extra life)
+LB51F:	.BYTE	034,260,223,224,001,225,226,000
+	.BYTE	104,104,377,104,104,000
+
+; Key icon as $D7F3's type-$06 trigger message (see $C4B6)
+LB52D:	.BYTE	040
+LB52E:	.BYTE	240,227,230,000,006,106,000,000	; key icon glyphs; message index $06 points here
+
+; Wreath icon (custom font glyphs), message index $01 in $D7CE
+LB536:	.BYTE	000,235,236,237,001,240,241,242
+	.BYTE	000,106,006,106,377,106,006,106
+	.BYTE	000,000
+
+; Flower icon (custom font glyphs), for event status $05
+LB548:	.BYTE	000,243,244,001,245,246,000,105
+	.BYTE	107,377,104,106,000,000
+	.BYTE	000,306,001,307,001,307,001,310
+	.BYTE	000,102,377,104,377,104,377,106
+	.BYTE	000
+
+; Quiver icon, upright/HUD (custom font glyphs), for the Ent's bow sale ($DF03)
+LB567:	.BYTE	024,250,300,301,001,302,303,001
+	.BYTE	304,305,000,106,106,377,104,104
+	.BYTE	377,104,104,000,000
+
+; Quiver icon, laying (custom font glyphs), message index $07 in $D7CE - the gameplay pickup, as opposed to $B567's upright HUD quiver
+LB57C:	.BYTE	000,253,254,255,256,000,104,104
+	.BYTE	104,106,000
+
+; Ornament at the left side of the game screen
+LB587:	.BYTE	000,000
+	.BYTE	257,260,001,261,262,001,263,264
+	.BYTE	001,265,266,001,261,262,001,263
+	.BYTE	264,001,265,266,001,261,262,001
+	.BYTE	263,264,001,265,266,001,261,262
+	.BYTE	001,263,264,001,265,266,001,261
+	.BYTE	262,001,263,264,001,265,266,001
+	.BYTE	261,262,001,267,266,000,000
+
+; Ornament at the right side of the game screen
+LB5C0:	.BYTE	170,000,002,260,257,001,262,261
+	.BYTE	001,264,263,001,266,265,001,262
+	.BYTE	261,001,264,263,001,266,265,001
+	.BYTE	262,261,001,264,263,001,266,265
+	.BYTE	001,262,261,001,264,263,001,266
+	.BYTE	265,001,262,261,001,264,263,001
+	.BYTE	266,265,001,262,261,001,266,267
+	.BYTE	000
+
+; Open/missing door-gate icon (custom font glyphs), message index $0D in $D7CE
+LB5F9:	.BYTE	000,357,040,040,040,001,040,040
+	.BYTE	040,040,001,040,040,040,040,001
+	.BYTE	040,040,040,040,001,040,040,040
+	.BYTE	040,000
+	.BYTE	106,104,104,104,377,104,104,104
+	.BYTE	104,377,104,104,104,104,377,104
+	.BYTE	104,104,104,377,104,104,104,104
+	.BYTE	377,104,104,104,104
+
+; Door/gate icon (custom font glyphs), message index $0E in $D7CE
+LB630:	.BYTE	000,247,250,251,252,001,360,361
+	.BYTE	362,363,001,364,365,366,367,001
+	.BYTE	370,371,372,373,001,374,375,376
+	.BYTE	377,000,006,106,106,007,377,006
+	.BYTE	007,007,007,377,006,007,106,007
+	.BYTE	377,006,007,007,007,377,006,106
+	.BYTE	007,007,000
+
+; GAME OVER message
+LB663:	.BYTE	064,050,040,040,040,040,040,040
+	.BYTE	001
+	.ASCII	/ GAME /
+	.BYTE	001,040,040,040,040,040,040,001
+	.ASCII	/ OVER /
+	.BYTE	001,040,040,040,040,040,040,000
+	.BYTE	100,100,100,100,100,100,377,100
+	.BYTE	104,104,104,104,100,377,100,100
+	.BYTE	100,100,100,100,377,100,104,104
+	.BYTE	104,104,100,377,100,100,100,100
+	.BYTE	100,100,000,000
+
+; Victory message
+LB6AC:	.BYTE	000
+	.ASCII	/       CONGRATULATIONS/
+	.BYTE	001,001,001
+	.ASCII	/     YOU HAVE SUCCESFULLY/
+	.BYTE	001,001
+	.ASCII	/          COMPLETED/
+	.BYTE	001,001
+	.ASCII	/      ROBIN OF THE WOOD/
+	.BYTE	001,001,001
+	.ASCII	/   THE THREE MAGIC ARROWS/
+	.BYTE	001,001
+	.ASCII	/  ENABLED YOU TO ENTER THE/
+	.BYTE	001,001
+	.ASCII	/ARCHERY CONTEST AND WIN BACK/
+	.BYTE	001,001
+	.ASCII	/      THE SILVER ARROW/
+	.BYTE	000,102,102,102,102,102,102,102
+	.BYTE	102,102,102,102,102,102,102,102
+	.BYTE	102,102,102,102,102,102,102,102
+	.BYTE	377,377,377,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,377,377,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,377
+	.BYTE	377,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,106,106,106,106,106,106
+	.BYTE	106,106,377,377,377,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,377,377,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,377,377,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,007,007,007,007,007
+	.BYTE	007,007,007,377,377,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,107,107,000,052,110,305,355
+	.BYTE	133,270,323,267,355,122,300,041
+	.BYTE	272,323,065,176,346,003,300,335
+	.BYTE	041,373,270,041,352,215,042,330
+	.BYTE	306,335,313,004,326,335,313,004
+	.BYTE	306,315,367,310,335,041,373,270
+	.BYTE	072,205,314,376,044,070,051,376
+	.BYTE	134,060,045,041,030,271,335,313
+	.BYTE	004,176,040,034,335,313,004,376
+	.BYTE	076,120,062,272,323,335,313,010
+	.BYTE	176,021,013,271,040,003,021,006
+	.BYTE	271,335,163,002,335,162,003,311
+	.BYTE	335,176,005,346,177,376,002,300
+	.BYTE	257,062,362,321,072,272,323,267
+	.BYTE	300,315,215,214,041,234,000,042
+	.BYTE	110,305,041,200,314,313,216,257
+	.BYTE	315,077,320,315,162,300,315,016
+	.BYTE	304,076,004,315,166,302,315,201
+	.BYTE	316,315,263,317,341,303,201,277
+
+;------------------------------------------------------------------------------
+; Branched antlers, ZX $D2C3-$D348 -- the energy display.
+;
+; Same message format as the icons above: glyph codes plus position and
+; attribute bytes.  The glyphs are the antler halves in the font, codes
+; 133-151 (upper) and 152-170 (lower), 15. each; the trailing 107 runs are
+; the attribute bytes.
+;
+; The shape never changes -- $BF37 recolours that attribute strip from the
+; energy value, so the antlers colour reflects energy rather than the art
+; being redrawn.  Printed by $CD95 (left) and $CD9B (right).
+;
+; On the UKNC we do the recolour through the screen display list instead: a
+; palette change on the line before the antlers and another on the line after,
+; so showing the energy level costs two display-list entries per frame and
+; touches no pixel or attribute data at all.  That makes the 107 attribute
+; runs below dead weight at draw time -- they are kept only to hold the
+; original layout.
+;------------------------------------------------------------------------------
+
+; Branched antlers, left part
+LD2C3:	.BYTE	004,220,133,134,135,136,137,140
+	.BYTE	141,142,143,144,145,146,147,150
+	.BYTE	151,001,152,153,154,155,156,157
+	.BYTE	160,161,162,163,164,165,166,167
+	.BYTE	170,000,107,107,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,200,107,107,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,000
+
+; Branched antlers, right part
+LD305:	.BYTE	100,220,002,151,150,147,146,145
+	.BYTE	144,143,142,141,140,137,136,135
+	.BYTE	134,133,001,170,167,166,165,164
+	.BYTE	163,162,161,160,157,156,155,154
+	.BYTE	153,152,003,000,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,107,107,200,107,107,107,107
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107,107,107,000
+
+;------------------------------------------------------------------------------
+; Menu messages, ZX $ACC6-$AD30.
+;
+; Printed by $AC83 through $D631, positioned from the table at $D7CE.
+;
+; Each menu line is stored twice: the text, a 000 terminator, then an equal
+; length run of attribute bytes for that same line, and another 000.  The
+; original wrote those attribute runs as text, so the disassembly shows them
+; as repeated letters -- "FFFFFFF" is seven cells of attribute 106.
+;------------------------------------------------------------------------------
+
+LACC6:	.ASCII	/0 START/
+	.BYTE	000
+LACCE:	.BYTE	106,106,106,106,106,106,106,000	; attributes
+LACD6:	.ASCII	/1 KEYBOARD/
+	.BYTE	000
+LACE1:	.BYTE	105,105,105,105,105,105,105,105	; attributes
+	.BYTE	105,105,000
+LACEC:	.ASCII	/2 KEMPSTON/
+	.BYTE	000
+LACF7:	.BYTE	104,104,104,104,104,104,104,104	; attributes
+	.BYTE	104,104,000
+LAD02:	.ASCII	/3 INTERFACE II/
+	.BYTE	000
+LAD11:	.BYTE	103,103,103,103,103,103,103,103	; attributes
+	.BYTE	103,103,103,103,103,103,000
+LAD20:	.ASCII	/4 CURSOR/
+	.BYTE	000
+LAD29:	.BYTE	102,102,102,102,102,102,102,102	; attributes
+

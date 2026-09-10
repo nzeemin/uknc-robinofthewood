@@ -1,0 +1,702 @@
+;------------------------------------------------------------------------------
+; ROBINCOR.MAC -- Robin of the Wood game logic.
+; Included into ROBIN1.MAC, so this is one single module; long labels allowed.
+;------------------------------------------------------------------------------
+
+;------------------------------------------------------------------------------
+; Flush all dirty cells of the play area to the screen through the TILBUF ring.
+; Utilizes R0-R5.
+
+DRAWALL:
+	MOV	#SCRTOP, SCRADR
+	CLR	CELLOFS
+	CLR	PIXOFS
+	MOV	#PLAYH, R1		; rows counter
+DRAWALLROW:
+	MOV	R1, -(SP)		; save rows counter
+	MOV	#PLAYW, R4		; columns counter
+DRAWALLCOL:
+	MOV	CELLOFS, R3
+	TSTB	DIRTYCELLS(R3)		; does this cell need a flush?
+	BNE	DRAWCELL		; yes => emit a record
+DRAWALLNEXT:
+	INC	SCRADR			; screen address to the next column
+	INC	CELLOFS
+	INC	PIXOFS
+	SOB	R4, DRAWALLCOL
+; next tile row
+	ADD	#<SCRROW-PLAYW>, SCRADR
+	ADD	#<<PLAYW*8.>-PLAYW>, PIXOFS	; skip the remaining 7 pixel lines
+	MOV	(SP)+, R1
+	SOB	R1, DRAWALLROW
+	RETURN
+
+; Emit one cell into the ring.
+DRAWCELL:
+	CLRB	DIRTYCELLS(R3)		; clear the "needs a flush" flag
+; Claim the next record in the Tile Buffer
+	MOV	TLBUFA, R3
+	ADD	#10., R3		; to next record
+	CMP	R3, #TLBUFE		; end of Tile Buffer?
+	BLO	10$
+	MOV	#TILBUF, R3
+10$:	TST	(R3)			; is it free?
+	BNE	10$			; wait for PPU to finish work
+	TST	(R3)+			; skip the screen address word
+	MOV	R3, TLBUFA		; update current address
+; Copy 8. pixel bytes out of the shadow bitmap
+	MOV	PIXOFS, R2
+	ADD	#SHADOWPIX, R2
+	MOV	#8., R0
+20$:	MOVB	(R2), (R3)+
+	ADD	#PLAYW, R2		; next pixel line
+	SOB	R0, 20$
+; Copy the attribute byte
+	MOV	CELLOFS, R2
+	MOVB	SHADOWATR(R2), (R3)
+; Publish the record
+	MOV	TLBUFA, R3
+	MOV	SCRADR, -2(R3)		; write screen address - mark record to draw
+;
+	BR	DRAWALLNEXT
+
+;------------------------------------------------------------------------------
+; Mark a cell dirty: R0 = column, R1 = row.  Utilizes R2.
+
+MARKDIRTY:
+	MOV	R1, R2
+	ASL	R2
+	ASL	R2
+	ASL	R2
+	ASL	R2
+	ASL	R2			; row * 32.
+	ADD	R0, R2
+	MOVB	#1, DIRTYCELLS(R2)
+	RETURN
+
+; Mark the whole play area dirty -- used on room changes.
+MARKALLDIRTY:
+	MOV	#<PLAYH*PLAYW>, R0
+	MOV	#DIRTYCELLS, R1
+10$:	MOVB	#1, (R1)+
+	SOB	R0, 10$
+	RETURN
+
+;------------------------------------------------------------------------------
+; Input state, filled by the PPU keyboard interrupt handler at PPUKEY.
+; Returns the direction bitmask in R0, opposite pairs cancelled -- the port of
+; the ZX $D1F1 behaviour.
+
+READINPUT:
+	MOV	@#PPUKEY, R0
+	MOV	R0, R1
+	BIC	#^C<PKEYRT+PKEYLT>, R1
+	CMP	R1, #<PKEYRT+PKEYLT>	; both left and right?
+	BNE	10$
+	BIC	#<PKEYRT+PKEYLT>, R0	; yes => cancel both
+10$:	MOV	R0, R1
+	BIC	#^C<PKEYUP+PKEYDN>, R1
+	CMP	R1, #<PKEYUP+PKEYDN>	; both up and down?
+	BNE	20$
+	BIC	#<PKEYUP+PKEYDN>, R0	; yes => cancel both
+20$:	RETURN
+
+;------------------------------------------------------------------------------
+; Room drawing -- the port of the ZX routines at $C072 and below.
+;
+; A room is drawn in two passes over the same token-walking code: first the
+; room type from the descriptor table at L7B39, then -- for room numbers below
+; $0100 only -- the additional elements from L8511 on top.  ROOMIDX means
+; different things in the two passes: the room type in the first, the room
+; number itself in the second.
+;
+; Both tables use the same format: a count byte followed by that many 2-byte
+; tokens, entries packed sequentially with no fixed stride.
+;
+; These routines follow the usual Z80 register mapping so they can be diffed
+; against the original: R0 = A, R1 = BC, R2 = DE, R3 = HL, R4 = IX, R5 = IY.
+
+CURROOM:	.WORD	0	; $C548, packed room number: column in the high
+				; nibble, row in the rest
+ROOMIDX:	.WORD	0	; $C547, index into the table DESCTAB points at
+DESCTAB:	.WORD	0	; $C54A, L7B39 or L8511
+ROOMFLAG:	.WORD	0	; $C0E8, bit 7 of the room's world-map byte
+MIRRADJ:	.WORD	0	; the column mirror adjust, 034 or 0
+
+;------------------------------------------------------------------------------
+; Skip forward to the ROOMIDX-th descriptor in the table at DESCTAB -- the port
+; of the ZX routine at $C1C1.
+;
+; Entries are variable length, so reaching entry N means walking forward over
+; the N before it, each one 2*count+1 bytes long.
+;
+; Returns R3 -> the descriptor's count byte.
+; Utilizes R1, R2.
+
+SKIPDESC:
+	MOV	DESCTAB, R3		; HL -> the first descriptor
+	MOV	ROOMIDX, R1		; B = how many to skip over
+	BEQ	20$			; index 0 => it is the first one
+10$:	CLR	R2			; DE = 2 * token count + 1
+	BISB	(R3), R2		; unsigned byte load, MOVB would sign-extend
+	ASL	R2			; 2 bytes per token
+	INC	R2			; plus the count byte itself
+	ADD	R2, R3			; HL -> the next descriptor
+	SOB	R1, 10$
+20$:	RETURN
+
+;------------------------------------------------------------------------------
+; Mirror a block horizontally, in place -- the port of the ZX routine at $C1D6.
+;
+; Each 4-byte pixel row is reversed end for end with every byte bit-reversed
+; through LFD00.  Attribute rows are swapped end for end but NOT bit-reversed,
+; and are left alone entirely when the flat-attribute flag is set.
+;
+; The block's own header bit 7 is flipped, so the data itself records which way
+; round it currently lies; DRAWBLOCK reads the header live, so a block left
+; mirrored by one placement is mirrored back by the next.  The block data in
+; ROBINRBL.MAC is therefore mutated in place, exactly as on the ZX.
+;
+; Input: R2 -> the block data, header byte first.  R2 is preserved.
+; Utilizes R0-R5.
+
+MIRHDR:	.WORD	0		; the header, after its flag has been flipped
+
+MIRRORBLOCK:
+	MOV	R2, -(SP)		; keep the block address for the caller
+	CLR	R0
+	BISB	(R2), R0
+	MOV	#200, R1
+	XOR	R1, R0			; flip the block's own mirror flag
+	MOVB	R0, (R2)		; the header records which way round it lies
+	MOV	R0, MIRHDR
+;
+; pixel rows: reverse each row end for end, bit-reversing every byte
+;
+; The original takes the row count from bits 0-2 here, not bits 0-4 as the
+; drawing code does; no block has a count above 7 so the two agree.
+;
+	BIC	#^C7, R0		; header AND 7 = pixel rows / 8.
+	ASL	R0
+	ASL	R0
+	ASL	R0			; * 8. = pixel rows
+	MOV	R0, R5			; row counter
+	BEQ	20$
+	MOV	R2, R3
+	INC	R3			; -> the first pixel row
+10$:	MOV	R3, R4
+	ADD	#3, R4			; -> that row's right-hand end
+	CALL	SWAPREVERSED		; the outer pair
+	INC	R3
+	DEC	R4
+	CALL	SWAPREVERSED		; the inner pair
+	ADD	#3, R3			; -> the next row
+	DEC	R5
+	BNE	10$
+;
+; attribute rows: swapped end for end, left as they are
+;
+20$:	MOV	(SP)+, R2		; the block address again
+	BIT	#100, MIRHDR		; one attribute for the whole block?
+	BNE	90$			; yes => nothing to swap
+	MOV	MIRHDR, R0
+	BIC	#^C7, R0		; attribute row count
+	BEQ	90$
+	MOV	R0, R5			; row counter
+	MOV	MIRHDR, R0
+	BIC	#^C37, R0		; pixel bytes = <header AND 037> * 32.
+	.REPT	5
+	ASL	R0
+	.ENDR
+	MOV	R2, R3
+	INC	R3
+	ADD	R0, R3			; -> the first attribute row
+30$:	MOV	R3, R4
+	ADD	#3, R4
+	CALL	SWAPPLAIN		; the outer pair
+	INC	R3
+	DEC	R4
+	CALL	SWAPPLAIN		; the inner pair
+	ADD	#3, R3			; -> the next row
+	DEC	R5
+	BNE	30$
+90$:	RETURN
+
+; Swap the bytes at (R3) and (R4), bit-reversing both.  Utilizes R0, R1.
+SWAPREVERSED:
+	CLR	R0
+	BISB	(R3), R0
+	CLR	R1
+	BISB	(R4), R1
+	MOVB	LFD00(R1), (R3)
+	MOVB	LFD00(R0), (R4)
+	RETURN
+
+; Swap the bytes at (R3) and (R4) as they are.  Utilizes R0.
+SWAPPLAIN:
+	MOVB	(R3), R0
+	MOVB	(R4), (R3)
+	MOVB	R0, (R4)
+	RETURN
+
+;------------------------------------------------------------------------------
+; Draw one block token onto the shadow screen -- the port of the ZX routine at
+; $C0D1.
+;
+; Blocks are always 4 character cells (32 pixels) wide.  The header byte says
+; how tall:
+;   bit 7      natural-mirror flag
+;   bit 6      flat-attribute flag; one attribute byte fills the whole block
+;   bits 0-4   pixel rows / 8., each row 4 bytes
+;   bits 0-2   (reused) attribute row count, each row 4 bytes
+;
+; Input: BLKNUM = block number (bit 7 = the token's own mirror flag)
+;        BLKROW = character row, BLKCOL = column group (0-7, 4 cells each)
+; Utilizes R0-R5.
+
+BLKNUM:	.WORD	0		; block number from the token
+BLKROW:	.WORD	0		; character row
+BLKCOL:	.WORD	0		; column group, 4 character cells each
+BLKHDR:	.WORD	0		; the block's header byte
+
+DRAWBLOCK:
+; look the block up in the address table
+	MOV	BLKNUM, R0
+	BIC	#^C177, R0		; drop the token's mirror flag
+	ASL	R0			; two bytes per entry
+	MOV	L5B00(R0), R2		; DE -> the block data, header byte first
+	CLR	R0
+	BISB	(R2), R0		; the header byte
+	MOV	R0, BLKHDR
+;
+; Mirror this placement?  The block's own natural-mirror flag, the token's
+; mirror bit and the room's world-map bit 7 are XORed together; bit 7 of the
+; result decides.  MIRRORBLOCK flips the header's flag as it goes, so a block
+; already left mirrored by an earlier placement mirrors back here.
+;
+	MOV	BLKNUM, R1
+	XOR	R1, R0			; ^ the token's own mirror bit
+	MOV	ROOMFLAG, R1
+	XOR	R1, R0			; ^ the room's world-map byte
+	BIT	#200, R0
+	BEQ	5$			; bit 7 clear => draw it as it lies
+	CALL	MIRRORBLOCK		; R2 still -> the block data afterwards
+	CLR	R0
+	BISB	(R2), R0		; the header's flag has just flipped
+	MOV	R0, BLKHDR
+5$:	INC	R2			; DE -> the pixel data
+;
+; pixel rows: 4 bytes each, one character row apart
+;
+	MOV	BLKROW, R3
+	.REPT	8.
+	ASL	R3			; row * 256. -- one character row of pixels
+	.ENDR
+	MOV	BLKCOL, R1
+	ASL	R1
+	ASL	R1			; column group * 4 = character column
+	MOV	MIRRADJ, R5
+	XOR	R5, R1			; mirrored rooms flip the column group
+	ADD	R1, R3
+	ADD	#SHADOWPIX, R3		; HL -> the first pixel row
+;
+	MOV	BLKHDR, R0
+	BIC	#^C37, R0		; header AND 037 = pixel rows / 8.
+	ASL	R0
+	ASL	R0
+	ASL	R0			; * 8. = pixel rows
+	MOV	R0, R5			; row counter
+	BEQ	20$
+10$:	MOV	R3, R4			; keep the row's start
+	.REPT	4
+	MOVB	(R2)+, (R4)+
+	.ENDR
+	ADD	#PLAYW, R3		; down one pixel row
+	DEC	R5
+	BNE	10$
+;
+; attribute rows: 4 bytes each, one character row apart
+;
+20$:	MOV	BLKROW, R3
+	.REPT	5
+	ASL	R3			; row * 32. -- one character row of attributes
+	.ENDR
+	MOV	BLKCOL, R1
+	ASL	R1
+	ASL	R1
+	MOV	MIRRADJ, R5
+	XOR	R5, R1
+	ADD	R1, R3
+	ADD	#SHADOWATR, R3		; HL -> the first attribute row
+;
+	MOV	BLKHDR, R0
+	BIC	#^C7, R0		; header AND 7 = attribute row count
+	BEQ	90$			; none => done
+	MOV	R0, R5			; row counter
+	MOV	#1, R4			; step the source one byte per cell
+	BIT	#100, BLKHDR		; unless bit 6 says one attribute fills
+	BEQ	30$			;   the whole block, in which case the
+	CLR	R4			;   same byte is reread for every cell
+30$:	MOV	R3, R1			; keep the row's start
+	.REPT	4
+	MOVB	(R2), (R1)+
+	ADD	R4, R2
+	.ENDR
+	ADD	#PLAYW, R3		; down one character row
+	DEC	R5
+	BNE	30$
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Walk a descriptor's token list and draw each block -- the port of the ZX
+; routine at $C0AF.
+;
+; A descriptor is a count byte followed by that many 2-byte tokens.  Each token
+; is a coordinate byte plus a block number:
+;   coordinate  bits 0-2  column group, 4 character cells each
+;               bits 3-7  character row
+;   block       index into L5B00; bit 7 is that placement's mirror flag
+;
+; DRAWTOKENS picks the descriptor out of DESCTAB using ROOMIDX; DRAWTOKENSAT
+; takes R3 pointing straight at one, for the scenario token lists at $C15E.
+;
+; Utilizes R0-R5.
+
+DRAWTOKENS:
+	CALL	SKIPDESC		; R3 -> the ROOMIDX-th descriptor
+DRAWTOKENSAT:
+	CLR	R0
+	BISB	(R3)+, R0		; the token count
+	BEQ	90$			; zero => nothing to draw
+;
+; DRAWBLOCK clobbers every register, so the counter and the token pointer are
+; both kept on the stack across it.
+;
+10$:	MOV	R0, -(SP)		; save the counter
+	MOV	R3, -(SP)		; save the token pointer
+	CLR	R0
+	BISB	(R3)+, R0		; the coordinate byte
+	MOV	R0, R1
+	BIC	#^C7, R1
+	MOV	R1, BLKCOL		; bits 0-2 = column group
+	ASR	R0
+	ASR	R0
+	ASR	R0			; bits 3-7 = character row
+	BIC	#^C37, R0
+	MOV	R0, BLKROW
+	CLR	R0
+	BISB	(R3), R0		; the block number
+	MOV	R0, BLKNUM
+	CALL	DRAWBLOCK
+	MOV	(SP)+, R3		; the token pointer again
+	ADD	#2, R3			; -> the next token
+	MOV	(SP)+, R0		; the counter again
+	DEC	R0
+	BNE	10$
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Draw the room CURROOM onto the shadow screen -- the port of the ZX routine
+; at $C072.
+;
+; Two passes over DRAWTOKENS: the room type from L7B39, then -- for room
+; numbers below $0100 only -- that room's additional elements from L8511 drawn
+; on top.  ROOMIDX carries the room type in the first pass and the room number
+; itself in the second.
+;
+; The room's world-map byte drives both the per-block mirror decision (its bit
+; 7 feeds DRAWBLOCK's XOR through ROOMFLAG) and the column flip (MIRRADJ), so
+; a mirrored room has its blocks both flipped and moved to the opposite
+; column group.
+;
+; Utilizes R0-R5.
+
+DRAWROOM:
+	MOV	#L7B39, DESCTAB		; first pass: the room type
+	MOV	CURROOM, R3
+	CLR	R0
+	BISB	L79F9(R3), R0		; the room's world-map byte
+	MOV	R0, ROOMFLAG		; kept whole; only bit 7 is read later
+	CLR	MIRRADJ
+	BIT	#200, R0
+	BEQ	10$
+	MOV	#34, MIRRADJ		; mirrored room: 034 flips the column group
+10$:	BIC	#200, R0		; bits 0-6 = the room type
+	MOV	R0, ROOMIDX
+	CALL	DRAWTOKENS
+;
+	MOV	CURROOM, R0
+	CMP	R0, #400		; room $0100 or above?
+	BHIS	90$			; yes => the base room type only
+	MOV	R0, ROOMIDX		; the second pass indexes by room number
+	MOV	#L8511, DESCTAB
+	CALL	DRAWTOKENS
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Castle attribute recolour -- the port of the ZX routine at $C40E.
+;
+; The ZX runs this right after a room is drawn, for the 26. castle-area rooms
+; listed at LC550.  It rewrites every shadow attribute cell of the room:
+;   non-black paper           -> white ink on black    (attr 007)
+;   black paper, non-white ink -> cyan ink on black    (attr 005; the ZX has
+;                                bright cyan 105, bright is dropped here)
+;   black paper, white ink     -> left as it is
+;   empty cell (000)           -> left as it is
+;
+; Not a rooms-$0100+ concern: those never match the table.  Utilizes R0-R3.
+
+LC550:	.BYTE	074,075,112,113,114,115,132,133
+	.BYTE	134,135,152,153,154,155,172,173
+	.BYTE	174,175,212,213,214,215,234,235
+	.BYTE	254,255
+
+RECOLORCASTLE:
+	MOV	CURROOM, R0
+	CMP	R0, #400		; room $0100 or above never matches
+	BHIS	90$
+	MOV	#LC550, R1		; scan the 26. entries for this room
+	MOV	#26., R2
+10$:	CMPB	(R1)+, R0
+	BEQ	20$
+	SOB	R2, 10$
+	RETURN				; not a castle room
+20$:	MOV	#SHADOWATR, R1
+	MOV	#<PLAYH*PLAYW>, R2	; every attribute cell of the play area
+30$:	MOVB	(R1), R0
+	BEQ	40$			; empty cell => leave it
+	BIC	#^C70, R0		; paper bits 3-5
+	BEQ	50$			; black paper => check the ink
+	MOVB	#007, (R1)		; non-black paper => white on black
+	BR	40$
+50$:	MOVB	(R1), R0
+	BIC	#^C7, R0		; ink bits 0-2
+	CMP	R0, #7
+	BEQ	40$			; already white ink => leave it
+	MOVB	#005, (R1)		; black paper, other ink => cyan on black
+40$:	INC	R1
+	SOB	R2, 30$
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Clear the shadow screen -- the port of the ZX routine at $D03F.
+;
+; The ZX caller does XOR A first, so both areas are filled with 0.  Utilizes
+; R0, R1.
+
+CLRSHADOW:
+	MOV	#SHADOWPIX, R1
+	MOV	#<<<PLAYH*8.>*PLAYW>+<PLAYH*PLAYW>>/2, R0	; pixels + attrs, words
+10$:	CLR	(R1)+
+	SOB	R0, 10$
+	RETURN
+
+;------------------------------------------------------------------------------
+; Enter the room CURROOM: build its shadow screen and queue the whole play
+; area for the flush.  The core of the ZX room-entry sequence at $C024
+; ($D03F / $C072 / $C15E / $C444 / $C40E / $C462 / $C276); the pieces not yet
+; ported are marked below.
+;
+; Utilizes R0-R5.
+
+ENTERROOM:
+	CALL	CLRSHADOW		; $D03F
+	CALL	DRAWROOM		; $C072
+	;TODO: $C15E -- scenario decoration in the 3 random opening rooms
+	;TODO: $C444 -- room $BB special recolour
+	CALL	RECOLORCASTLE		; $C40E
+	;TODO: $C462 -- single-column-room hint message
+	;TODO: $C276 -- build the room's guards / boars
+	CALL	MARKALLDIRTY
+	RETURN
+
+;------------------------------------------------------------------------------
+; Game entry point, called from START in ROBIN1.MAC.
+
+GAMEMAIN:
+	CALL	RUNPPU			; start the PPU renderer
+;
+	MOV	#115, CURROOM		; !!TEMP!! room $4D, until a menu/new-game picks one
+	CALL	ENTERROOM
+;
+	;TODO: title picture and menu
+	;TODO: new game init
+;
+GAMELOOP:
+	;TODO: read input, advance actors, render into the shadow screen
+	CALL	DRAWALL			; flush changed cells to the screen
+;
+	MOV	@#PPUKEY, R0
+	BIT	#PKEYST, R0		; STOP key?
+	BEQ	GAMELOOP
+;
+	CALL	STOPPU
+	JMP	FINISH
+
+;------------------------------------------------------------------------------
+; Sprite frame pointer table, ZX $8D80 -- 73. words, one per animation frame.
+;
+; $C6D6 doubles an animation frame number to index this table.  Robin's object
+; record uses L8D80 as its base; other actors point the frame base at L8DC4 or
+; L8DEA first, so the same table serves everyone at three different origins and
+; each actor's frame numbers are relative to its own base.
+;
+; Bit 7 of a frame number selects the mirrored variant; that is produced at
+; draw time by $C8B7 through the bit-reversal table, not stored separately.
+;
+; The frames themselves are in ROBINSPR.MAC.
+;------------------------------------------------------------------------------
+
+L8D80:					; frame base for Robin's own record
+	.WORD	L8E24,L8E87,L8EEA,L8F4D,L8FB0,L9013,L9076,L90D9	; frames 0.-7.
+	.WORD	L913C,L919F,L919F,L9202,L9265,L92C8,L932B,L938E	; frames 8.-15.
+	.WORD	L93F1,L8E24,L8E24,L8E24,LA053,LA073,LA093,LA0B3	; frames 16.-23.
+	.WORD	LA0D3,LA0F3,LA113,LA133,LA153,LA190,LA1B0,LA1D0	; frames 24.-31.
+	.WORD	LA1F0,LA210	; frames 32.-33.
+L8DC4:					; frame base used by $C6D8 for other actors
+	.WORD	L9454,L94B7,L951A,L957D,L95E0,L9643,L96A6,L9709	; frames 0.-7.
+	.WORD	L976C,L97CF,L9832,L9895,L98F8,L995B,L99BE,L99BE	; frames 8.-15.
+	.WORD	L9A36,L9A56,L9A76	; frames 16.-18.
+L8DEA:					; frame base used by $C6D8 for other actors
+	.WORD	LA230,LA26D,LA2AA,LA83C,LA89F,LA902,LA45E,LA4C1	; frames 0.-7.
+	.WORD	LA524,LA587,LA5EA,LA64D,LA6B0,LA713,LA776,LA7D9	; frames 8.-15.
+	.WORD	LA965,LA998,LA9CB,LA9FE	; frames 16.-19.
+
+;------------------------------------------------------------------------------
+; World map, ZX $79F9 -- one byte per room, 16. columns x 20. rows.
+;
+; Indexed by the packed room number: room = row * 16. + column, with the row
+; wrapping at 0/19 as $C22F steps between rooms.
+;
+; Bits 0-6 are a descriptor index: $C072 uses it into the room-type table for
+; every room, and additionally into the additional-elements table for rooms
+; $00-$FF (rooms $0100 and above get the base type only).
+; Bit 7 is read twice for two different purposes: $C072 stashes it, and $C2FA
+; reads the same bit directly as a "special room" flag.
+;------------------------------------------------------------------------------
+
+L79F9:
+	.BYTE	002,201,003,005,205,003,015,002,012,215,012,000,221,203,001,021	; row  0.
+	.BYTE	001,017,002,014,003,013,006,004,213,011,002,215,012,203,017,022	; row  1.
+	.BYTE	004,206,201,007,213,006,204,001,010,202,201,012,204,002,021,023	; row  2.
+	.BYTE	013,000,015,001,207,201,042,237,041,237,042,240,041,042,005,212	; row  3.
+	.BYTE	211,015,005,000,003,014,041,243,245,243,241,241,046,037,003,013	; row  4.
+	.BYTE	001,210,016,001,203,005,245,037,045,377,246,043,246,045,202,005	; row  5.
+	.BYTE	001,002,206,004,003,201,244,043,046,377,245,040,046,245,203,020	; row  6.
+	.BYTE	015,000,002,026,003,217,041,241,043,035,043,237,043,045,202,010	; row  7.
+	.BYTE	211,001,216,030,002,006,245,244,040,046,042,044,237,046,003,014	; row  8.
+	.BYTE	001,213,211,013,002,003,244,037,041,045,040,042,044,246,004,212	; row  9.
+	.BYTE	213,012,213,007,220,002,042,043,044,243,042,037,040,044,002,015	; row 10.
+	.BYTE	224,001,010,216,005,217,231,033,232,034,231,032,031,232,026,022	; row 11.
+	.BYTE	223,203,000,221,003,024,022,030,215,012,210,003,207,015,230,023	; row 12.
+	.BYTE	011,001,025,206,017,023,224,017,205,000,001,014,202,005,220,212	; row 13.
+	.BYTE	013,003,030,015,222,221,223,010,001,220,016,005,000,014,007,214	; row 14.
+	.BYTE	022,226,202,212,022,012,021,003,014,211,023,002,003,007,015,206	; row 15.
+	.BYTE	222,027,014,217,224,002,022,220,212,026,024,026,000,216,211,220	; row 16.
+	.BYTE	212,000,022,006,210,003,222,007,216,030,012,027,220,212,013,024	; row 17.
+	.BYTE	016,000,206,214,200,201,024,003,212,015,014,013,006,203,022,023	; row 18.
+	.BYTE	205,000,004,021,215,203,206,000,016,005,221,212,015,200,012,024	; row 19.
+
+;------------------------------------------------------------------------------
+; Data modules
+
+.INCLUDE /ROBINFNT.MAC/
+.INCLUDE /ROBINRBL.MAC/
+.INCLUDE /ROBINRTP.MAC/
+.INCLUDE /ROBINRMX.MAC/
+.INCLUDE /ROBINSPR.MAC/
+.INCLUDE /ROBININD.MAC/
+
+;------------------------------------------------------------------------------
+; Bit-reverse lookup table, ZX $FD00 -- LFD00[N] is N with its bits reversed.
+;
+; The ZX built this at startup with $CFEE; here it is precalculated, so nothing
+; has to run before the first room is drawn.
+;
+; Used to mirror room blocks horizontally ($C1D6) and sprite frames ($C8B7):
+; each byte of a row is bit-reversed and the row's bytes are then swapped end
+; for end.
+;------------------------------------------------------------------------------
+
+LFD00:
+	.BYTE	000,200,100,300,040,240,140,340	; 000-007
+	.BYTE	020,220,120,320,060,260,160,360	; 010-017
+	.BYTE	010,210,110,310,050,250,150,350	; 020-027
+	.BYTE	030,230,130,330,070,270,170,370	; 030-037
+	.BYTE	004,204,104,304,044,244,144,344	; 040-047
+	.BYTE	024,224,124,324,064,264,164,364	; 050-057
+	.BYTE	014,214,114,314,054,254,154,354	; 060-067
+	.BYTE	034,234,134,334,074,274,174,374	; 070-077
+	.BYTE	002,202,102,302,042,242,142,342	; 100-107
+	.BYTE	022,222,122,322,062,262,162,362	; 110-117
+	.BYTE	012,212,112,312,052,252,152,352	; 120-127
+	.BYTE	032,232,132,332,072,272,172,372	; 130-137
+	.BYTE	006,206,106,306,046,246,146,346	; 140-147
+	.BYTE	026,226,126,326,066,266,166,366	; 150-157
+	.BYTE	016,216,116,316,056,256,156,356	; 160-167
+	.BYTE	036,236,136,336,076,276,176,376	; 170-177
+	.BYTE	001,201,101,301,041,241,141,341	; 200-207
+	.BYTE	021,221,121,321,061,261,161,361	; 210-217
+	.BYTE	011,211,111,311,051,251,151,351	; 220-227
+	.BYTE	031,231,131,331,071,271,171,371	; 230-237
+	.BYTE	005,205,105,305,045,245,145,345	; 240-247
+	.BYTE	025,225,125,325,065,265,165,365	; 250-257
+	.BYTE	015,215,115,315,055,255,155,355	; 260-267
+	.BYTE	035,235,135,335,075,275,175,375	; 270-277
+	.BYTE	003,203,103,303,043,243,143,343	; 300-307
+	.BYTE	023,223,123,323,063,263,163,363	; 310-317
+	.BYTE	013,213,113,313,053,253,153,353	; 320-327
+	.BYTE	033,233,133,333,073,273,173,373	; 330-337
+	.BYTE	007,207,107,307,047,247,147,347	; 340-347
+	.BYTE	027,227,127,327,067,267,167,367	; 350-357
+	.BYTE	017,217,117,317,057,257,157,357	; 360-367
+	.BYTE	037,237,137,337,077,277,177,377	; 370-377
+
+;------------------------------------------------------------------------------
+; Tile buffer: the CPU->PPU ring.
+;
+; Producer is DRAWALL here, consumer is DRTILS in ROBIN1.MAC.
+; Each record: 2. bytes screen address, 8. pixel bytes, 1. attribute byte, 1. pad.
+; A record with a zero screen address word is free.  The screen address is
+; written LAST -- that store is what publishes the record to the PPU.
+
+	.EVEN				; the PPU reads this ring as words, at TILBUF/2
+TILBUF:	.BLKB	TLBUFS*12.
+TLBUFE:					; Tile buffer end
+TLBUFA:	.WORD	TLBUFE-10.		; Current address in the Tile Buffer
+
+SCRADR:	.WORD	SCRTOP			; Current screen address during a flush
+CELLOFS:	.WORD	0		; Current offset into SHADOWATR / DIRTYCELLS
+PIXOFS:		.WORD	0		; Current offset into SHADOWPIX
+
+;------------------------------------------------------------------------------
+; Shadow screen
+;
+; The ZX original renders into a shadow bitmap plus a shadow attribute area and
+; flushes only the changed cells to the real screen.  We keep exactly that:
+;
+;   ZX $EB00 shadow pixels  -> SHADOWPIX, 144 lines x 32 bytes
+;   ZX $E800 shadow attrs   -> SHADOWATR, 18 rows x 32 cells
+;   ZX $E500 changed cells  -> DIRTYCELLS, one flag byte per cell
+;   ZX $C85C flush          -> DRAWALL below, feeding the TILBUF ring
+;
+; Sprite and block drawing keep working on SHADOWPIX as 1bpp mono, exactly like
+; on the ZX, so the whole renderer above the flush ports over unchanged.
+;
+; Cell (COL,ROW) pixel data starts at SHADOWPIX + ROW*256. + COL,
+; with 32. bytes between its 8 pixel lines.
+; Cell (COL,ROW) attribute is at SHADOWATR + ROW*32. + COL.
+
+SHADOWPIX:	.BLKB	<PLAYH*8.>*PLAYW	; 144 lines x 32 bytes = 4608. bytes
+SHADOWATR:	.BLKB	PLAYH*PLAYW		; 18 x 32 = 576. bytes
+DIRTYCELLS:	.BLKB	PLAYH*PLAYW		; non-zero = cell needs a flush
+
+; Attribute byte layout, ZX compatible minus BRIGHT:
+;   bits 0-2  INK
+;   bits 3-5  PAPER
+;   bit  6    free (was BRIGHT -- dropped for this port)
+;   bit  7    free (was FLASH)
+; Candidate for folding DIRTYCELLS into SHADOWATR later; note that on the ZX
+; the $E500 area also serves as save-background-under-sprite scratch, which
+; still needs its own storage either way.
+;------------------------------------------------------------------------------
