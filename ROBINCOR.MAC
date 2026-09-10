@@ -5,7 +5,10 @@
 
 ;------------------------------------------------------------------------------
 ; Flush all dirty cells of the play area to the screen through the TILBUF ring.
-; Utilizes R0-R5.
+; Only the 28. inner columns are scanned: columns 0-1 and 30-31 are the fixed
+; ornament frame (ZX $CDA1), which the ZX $C85C flush skips too -- so a sprite
+; straying into an ornament cell corrupts only the (invisible) shadow bitmap,
+; never the real screen.  Utilizes R0-R5.
 
 DRAWALL:
 	MOV	#SCRTOP, SCRADR
@@ -14,7 +17,10 @@ DRAWALL:
 	MOV	#PLAYH, R1		; rows counter
 DRAWALLROW:
 	MOV	R1, -(SP)		; save rows counter
-	MOV	#PLAYW, R4		; columns counter
+	ADD	#2, SCRADR		; skip the 2 left ornament columns
+	ADD	#2, CELLOFS
+	ADD	#2, PIXOFS
+	MOV	#28., R4		; the 28. inner columns
 DRAWALLCOL:
 	MOV	CELLOFS, R3
 	TSTB	DIRTYCELLS(R3)		; does this cell need a flush?
@@ -24,9 +30,10 @@ DRAWALLNEXT:
 	INC	CELLOFS
 	INC	PIXOFS
 	SOB	R4, DRAWALLCOL
-; next tile row
-	ADD	#<SCRROW-PLAYW>, SCRADR
-	ADD	#<<PLAYW*8.>-PLAYW>, PIXOFS	; skip the remaining 7 pixel lines
+; skip the 2 right ornament columns, then on to the next tile row
+	ADD	#<SCRROW-PLAYW+2>, SCRADR
+	ADD	#<<PLAYW*8.>-PLAYW+2>, PIXOFS	; also skips the remaining 7 pixel lines
+	ADD	#2, CELLOFS
 	MOV	(SP)+, R1
 	SOB	R1, DRAWALLROW
 	RETURN
@@ -907,16 +914,27 @@ SPRXOR:
 	RETURN
 
 ;------------------------------------------------------------------------------
-; Robin's state.  A cut-down stand-in for the ZX object record at $CC7C -- just
-; enough for a hand-rolled walker; the full 11-byte record and the $C8F7
-; erase/step/redraw machinery come later.
+; Object table -- the port of the ZX 11-byte animation record (Robin's own is
+; at $CC7C; guards $AC13, Sheriff $B8FB, boars $DD05 share the layout).  OBJSTEP
+; below is the port of $C8F7.
+;
+; Byte offsets (raw, no named constants):
+;    0   countdown; each OBJSTEP decrements it, -1 deactivates the record
+;    1   per-actor scratch.  Robin: bits 0-1 = walk phase, bit 7 = facing left
+;    2,3 frame-list pointer (unused until the frame-list walker lands)
+;    4   status flags: bit 0 (001) active
+;                      bit 1 (002) erase armed -- redraw current frame to rub out
+;                      bit 2 (004) step requested -- promote the next frame
+;                      bit 5 (040) hit
+;    5,6,7    current frame number (bit 7 = mirror), X (2-pixel units), Y (pixels)
+;    8,9,10   next frame number, X, Y -- the caller fills these and sets bit 2
 
-ROBINX:		.WORD	0	; X in 2-pixel units (the DRAWFRAME / $C6D6 convention)
-ROBINY:		.WORD	0	; Y in pixels, top row of the sprite
-ROBINDIR:	.WORD	0	; last committed direction bit (PKEYLT/RT/UP/DN); 0 = idle
-ROBINMIR:	.WORD	0	; 200 when facing left, else 0 -- ORed into the frame number
-ROBINPH:	.WORD	0	; walk-cycle phase
-ROBINFRM:	.WORD	0	; frame number last drawn, kept for the XOR erase
+NOBJ	= 6.			; Robin + up to 5 guests
+OBJSZ	= 11.
+
+OBJTAB:		.BLKB	NOBJ*OBJSZ
+ROBIN	= OBJTAB		; entry 0 is Robin
+
 TICKODD:	.WORD	0	; flips every frame; Robin advances on every other one
 
 RSPAWNX	= 8. + <12.*4>		; play-area cell column 12., in X units
@@ -935,18 +953,22 @@ GAMEMAIN:
 	;TODO: title picture and menu
 	;TODO: new game init
 ;
-	MOV	#RSPAWNX, ROBINX	; drop Robin at a fixed cell for now
-	MOV	#RSPAWNY, ROBINY
-	CLR	ROBINDIR
-	CLR	ROBINMIR
-	CLR	ROBINPH
-	CLR	ROBINFRM
+	MOV	#ROBIN, R4		; wipe the record, then drop Robin at a fixed cell
+	MOV	#OBJSZ, R0
+10$:	CLRB	(R4)+
+	SOB	R0, 10$
+	MOV	#ROBIN, R4
+	MOVB	#3, 4(R4)		; active + erase-armed
+	MOVB	#RSPAWNX, 6(R4)		; current frame 0 at the spawn cell...
+	MOVB	#RSPAWNY, 7(R4)
+	MOVB	#RSPAWNX, 9.(R4)		; ...and the next slot starts there too
+	MOVB	#RSPAWNY, 10.(R4)
 	CLR	TICKODD
 ;
-	MOV	ROBINFRM, R0		; put the idle frame on screen once, so
-	MOV	#L8D80, R1		; MOVEROBIN always has a real frame to erase
-	MOV	ROBINX, R2
-	MOV	ROBINY, R3
+	CLR	R0			; put frame 0 on screen so the first erase is real
+	MOV	#L8D80, R1
+	MOV	#RSPAWNX, R2
+	MOV	#RSPAWNY, R3
 	CALL	DRAWFRAME
 ;
 GAMELOOP:
@@ -970,16 +992,66 @@ GAMELOOP:
 	JMP	FINISH
 
 ;------------------------------------------------------------------------------
-; Advance Robin one walk step from the current input.  Hand-rolled stand-in for
-; the ZX chain $C6A2 -> $C95A -> $C9E7/$CD42 -> $C8F7: no cell-boundary
-; alignment gating, no block/attribute collision, no action system yet.  Called
-; on every other frame from GAMELOOP.
-;
-; Erases the current frame (XOR redraw), steps position + facing, advances the
-; walk cycle, draws the new frame.  The input mask lives in memory across the
-; DRAWFRAME calls, which clobber R0-R5.
+; Service one animation record -- the port of the ZX $C8F7.
+;   R4 -> the record, R1 = the frame-pointer-table base for DRAWFRAME.
+; Countdown, then: if bit 1 is armed redraw the current frame (XOR = erase); if
+; bit 2 is requested promote the next slot (8/9/10 -> 5/6/7), arm bit 1 for next
+; time, and draw the new current frame.  The linked-list splice on -1 is not
+; ported yet -- the record is just deactivated.  DRAWFRAME clobbers R0-R5, so R4
+; is saved around it.
 
-MRBMSK:		.WORD	0		; this step's direction mask
+OBJBASE:	.WORD	0		; frame-pointer-table base, kept across DRAWFRAME
+
+OBJSTEP:
+	MOV	R1, OBJBASE		; DRAWFRAME clobbers R1 -- stash the base
+	BITB	#1, 4(R4)		; bit 0 clear => record is not live
+	BEQ	90$
+	DECB	(R4)			; tick the countdown
+	BPL	10$
+	BICB	#1, 4(R4)		; -1 => deactivate (splice-out comes later)
+	RETURN
+;
+10$:	BITB	#2, 4(R4)		; erase armed?
+	BEQ	20$
+	BICB	#2, 4(R4)
+	CLR	R0
+	BISB	5(R4), R0		; current frame number (bit 7 = mirror)
+	CLR	R2
+	BISB	6(R4), R2		; current X
+	CLR	R3
+	BISB	7(R4), R3		; current Y
+	MOV	OBJBASE, R1
+	MOV	R4, -(SP)
+	CALL	DRAWFRAME
+	MOV	(SP)+, R4
+;
+20$:	BITB	#4, 4(R4)		; step requested?
+	BEQ	90$
+	BICB	#4, 4(R4)
+	BISB	#2, 4(R4)		; arm the erase for next time
+	MOVB	8.(R4), 5(R4)		; promote the next slot to current
+	MOVB	9.(R4), 6(R4)
+	MOVB	10.(R4), 7(R4)
+	CLR	R0
+	BISB	5(R4), R0
+	CLR	R2
+	BISB	6(R4), R2
+	CLR	R3
+	BISB	7(R4), R3
+	MOV	OBJBASE, R1
+	MOV	R4, -(SP)
+	CALL	DRAWFRAME
+	MOV	(SP)+, R4
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Advance Robin one step from the current input, then hand off to OBJSTEP.
+; Hand-rolled stand-in for the ZX chain $C6A2 -> $C95A -> $C9E7/$CD42: no
+; cell-boundary alignment gating, no block/attribute collision, no action
+; system.  Called on every other frame from GAMELOOP.
+;
+; Like $C6A2 it fills the record's next slot and requests a step every call --
+; even standing still, so the erase/redraw stays balanced.  Idle => frame 0.
 
 RSTEPX	= 2.			; X move per step, in 2-pixel units (= 4 px)
 RSTEPY	= 4.			; Y move per step, in pixels
@@ -987,65 +1059,72 @@ RMINY	= 8.			; X is left unclamped -- ROOMEDGE handles the sides
 RMAXY	= 116.
 
 MOVEROBIN:
+	MOV	#ROBIN, R4
+	MOVB	#10., (R4)		; Robin is permanent -- keep the countdown off -1
 	CALL	READINPUT		; R0 = direction mask, opposite pairs cancelled
 	BIC	#^C<PKEYLT+PKEYRT+PKEYUP+PKEYDN>, R0
-	MOV	R0, MRBMSK
-	BEQ	90$			; nothing pressed => stand still, keep the frame
+	BEQ	50$			; nothing pressed => idle frame, same position
 ;
-; erase the current frame
+; facing from a horizontal press
 ;
-	MOV	ROBINFRM, R0
-	BIS	ROBINMIR, R0
-	MOV	#L8D80, R1
-	MOV	ROBINX, R2
-	MOV	ROBINY, R3
-	CALL	DRAWFRAME
-;
-; step position, and set facing from a horizontal press
-;
-	BIT	#PKEYLT, MRBMSK
+	BIT	#PKEYLT, R0
 	BEQ	10$
-	MOV	#200, ROBINMIR		; face left
-	SUB	#RSTEPX, ROBINX
-	BR	40$
-10$:	BIT	#PKEYRT, MRBMSK
+	BISB	#200, 1(R4)		; face left
+10$:	BIT	#PKEYRT, R0
+	BEQ	12$
+	BICB	#200, 1(R4)		; face right
+;
+; step the next-slot position (offsets 9 / 10)
+;
+12$:	CLR	R2
+	BISB	9.(R4), R2
+	CLR	R3
+	BISB	10.(R4), R3
+	BIT	#PKEYLT, R0
+	BEQ	14$
+	SUB	#RSTEPX, R2
+14$:	BIT	#PKEYRT, R0
+	BEQ	16$
+	ADD	#RSTEPX, R2
+16$:	BIT	#PKEYUP, R0
+	BEQ	18$
+	SUB	#RSTEPY, R3
+18$:	BIT	#PKEYDN, R0
 	BEQ	20$
-	CLR	ROBINMIR		; face right
-	ADD	#RSTEPX, ROBINX
-	BR	40$
-20$:	BIT	#PKEYUP, MRBMSK
-	BEQ	30$
-	SUB	#RSTEPY, ROBINY
-	BR	40$
-30$:	ADD	#RSTEPY, ROBINY		; must be DOWN
+	ADD	#RSTEPY, R3
+20$:	CMP	R3, #RMINY		; clamp Y (X is ROOMEDGE's job)
+	BGE	22$
+	MOV	#RMINY, R3
+22$:	CMP	R3, #RMAXY
+	BLE	24$
+	MOV	#RMAXY, R3
+24$:	MOVB	R2, 9.(R4)
+	MOVB	R3, 10.(R4)
 ;
-; clamp Y to the play area (X is handled by ROOMEDGE after the move)
+; advance the walk phase (offset 1, bits 0-1) and pick the frame
 ;
-40$:	CMP	ROBINY, #RMINY
-	BGE	46$
-	MOV	#RMINY, ROBINY
-46$:	CMP	ROBINY, #RMAXY
-	BLE	48$
-	MOV	#RMAXY, ROBINY
-;
-; advance the walk cycle and pick the frame
-;
-48$:	INC	ROBINPH
-	BIC	#^C3, ROBINPH		; phase 0..3
-	MOV	ROBINPH, R0
+	MOVB	1(R4), R0
+	MOV	R0, R1
+	BIC	#^C200, R1		; keep the facing bit
+	INC	R0
+	BIC	#^C3, R0		; phase 0..3
+	BIS	R1, R0
+	MOVB	R0, 1(R4)
+	BIC	#^C3, R0
 	CLR	R1
-	BISB	FRMWALK(R0), R1
-	MOV	R1, ROBINFRM
+	BISB	FRMWALK(R0), R1		; walk frame number
+	BR	60$
 ;
-; draw the new frame
+50$:	CLR	R1			; idle: frame 0, position unchanged
 ;
-	BIS	ROBINMIR, R1
-	MOV	R1, R0
+60$:	BITB	#200, 1(R4)		; facing left => set the mirror bit
+	BEQ	62$
+	BIS	#200, R1
+62$:	MOVB	R1, 8.(R4)		; next frame number
+	BISB	#5, 4(R4)		; active + step requested
 	MOV	#L8D80, R1
-	MOV	ROBINX, R2
-	MOV	ROBINY, R3
-	CALL	DRAWFRAME
-90$:	RETURN
+	CALL	OBJSTEP
+	RETURN
 
 FRMWALK:	.BYTE	1, 2, 3, 2	; a short run cycle from L8D80's walk frames
 	.EVEN
@@ -1072,31 +1151,37 @@ ROWSTEP	= 20			; octal: one map row in CURROOM (low nibble = column)
 NROWS	= 20.
 
 ROOMEDGE:
-	MOV	ROBINX, R2
+	MOV	#ROBIN, R4
+	CLR	R2
+	BISB	6(R4), R2		; Robin's current X
+	CLR	R3
+	BISB	7(R4), R3		; Robin's current Y
+;
 	CMP	R2, #REDGEL
 	BLT	10$			; X < 11. => off the left
 	CMP	R2, #REDGER
 	BLT	20$			; not off a side
-	SUB	#REDGEW, ROBINX		; off the right: wrap to the left side
-	MOV	#1, R3			; column + 1
+	SUB	#REDGEW, R2		; off the right: wrap to the left side
+	MOV	#1, R1			; column + 1
 	BR	14$
-10$:	ADD	#REDGEW, ROBINX		; off the left: wrap to the right side
-	MOV	#-1, R3			; column - 1
-14$:	MOV	CURROOM, R0
-	MOV	R0, R1
-	BIC	#^C17, R1		; R1 = column
-	ADD	R3, R1
-	BIC	#^C17, R1		; wrap 0..15 (AND 017: -1 -> 15, 16 -> 0)
+10$:	ADD	#REDGEW, R2		; off the left: wrap to the right side
+	MOV	#-1, R1			; column - 1
+14$:	MOVB	R2, 6(R4)		; store the wrapped X
+	MOV	CURROOM, R0
+	MOV	R0, R5
+	BIC	#^C17, R5		; R5 = column
+	ADD	R1, R5
+	BIC	#^C17, R5		; wrap 0..15 (AND 017: -1 -> 15, 16 -> 0)
 	BIC	#17, R0			; R0 = row part
-	BIS	R1, R0
+	BIS	R5, R0
 	BR	80$
 ;
-20$:	MOV	ROBINY, R2
-	CMP	R2, #REDGET
+20$:	CMP	R3, #REDGET
 	BLT	30$			; Y < 40. => off the top
-	CMP	R2, #REDGEB
+	CMP	R3, #REDGEB
 	BLT	90$			; not off top or bottom
-	MOV	#REDGEBY, ROBINY	; off the bottom: enter from the top, row + 1
+	MOV	#REDGEBY, R3		; off the bottom: enter from the top, row + 1
+	MOVB	R3, 7(R4)
 	MOV	CURROOM, R0
 	ADD	#ROWSTEP, R0
 	MOV	R0, R1
@@ -1106,7 +1191,8 @@ ROOMEDGE:
 	MOV	CURROOM, R0
 	BIC	#^C17, R0		; row wrapped past 19 => row 0, same column
 	BR	80$
-30$:	MOV	#REDGETY, ROBINY	; off the top: enter from the bottom, row - 1
+30$:	MOV	#REDGETY, R3		; off the top: enter from the bottom, row - 1
+	MOVB	R3, 7(R4)
 	MOV	CURROOM, R0
 	SUB	#ROWSTEP, R0
 	BCC	80$			; no borrow => row stayed >= 0
@@ -1117,11 +1203,17 @@ ROOMEDGE:
 80$:	MOV	R0, CURROOM
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
 ;
-	MOV	ROBINFRM, R0		; put Robin back on the fresh room
-	BIS	ROBINMIR, R0
+	MOV	#ROBIN, R4
+	BISB	#2, 4(R4)		; we redraw Robin below -- next step must erase it
+	MOVB	6(R4), 9.(R4)		; keep the next slot in step with the wrapped pos
+	MOVB	7(R4), 10.(R4)
+	CLR	R0
+	BISB	5(R4), R0		; redraw Robin's current frame on the fresh room
+	CLR	R2
+	BISB	6(R4), R2
+	CLR	R3
+	BISB	7(R4), R3
 	MOV	#L8D80, R1
-	MOV	ROBINX, R2
-	MOV	ROBINY, R3
 	CALL	DRAWFRAME
 90$:	RETURN
 
