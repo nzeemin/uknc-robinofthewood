@@ -114,7 +114,9 @@ L9013:	.BYTE	003,040,000			; header
 	.BYTE	200,001,370,000,000,160,000,000
 
 ; Robin run 6 -- frames 6.
-L9076:	.BYTE	002,040,000			; header
+L9076:	.BYTE	003,040,000			; header -- ZX had 002 (width 2), but the
+						; block is a dense 3-byte-per-row 32-row
+						; sprite; 002 desynced our row stride
 	.BYTE	000,000,000,000,350,000,000,004
 	.BYTE	001,000,002,002,000,000,004,000
 	.BYTE	001,000,300,004,001,100,200,007
