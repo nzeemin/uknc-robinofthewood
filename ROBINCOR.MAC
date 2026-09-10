@@ -668,6 +668,216 @@ CLAIMSLOT:
 	RETURN
 
 ;------------------------------------------------------------------------------
+; Draw a class 2-3 sprite frame into the shadow screen, XORed -- the port of
+; the width-class-under-4 path through the ZX routine at $C6D6 ($C723 plot
+; loop, $C74D shift, $C8B7 mirror).  The class-6 path ($C585 / $9AB3 glyph
+; font) is not ported.
+;
+; A frame is [width class][row count][pad] then row count rows of "width class"
+; pixel bytes (2 or 3).  Each row is bit-reversed already (UKNC order); it is
+; placed at bit offset 2*(X AND 3) inside a 4-byte window and XORed into the
+; shadow bitmap at SHADOWPIX + Y*PLAYW + byte column, one pixel line per row.
+;
+; X is in units of 2 pixels, matching $C6D6; byte column is (X - 8) / 4, and a
+; sprite with X < 8 wraps to the far right and one line up (the screen-edge
+; wrap).  Drawing the same frame at the same place again erases it (XOR).
+;
+; The covered cells are marked dirty so DRAWALL flushes them.
+;
+; Input: R0 -> the frame data, R1 = X (2-pixel units), R2 = Y (pixels),
+;        R3 non-zero to mirror.  Utilizes R0-R5 and SPRxxx below.
+;
+; DRAWFRAME (below, just before DRAWSPRITE) is the front end -- the head of
+; $C6D6.  It takes a frame NUMBER and one of the three pointer-table bases,
+; looks the frame data up, derives the mirror flag from bit 7 of the number,
+; then falls straight into DRAWSPRITE.
+
+SPRSRC:		.WORD	0		; walking pointer into the frame's pixel rows
+SPRROWS:	.WORD	0		; rows left to plot
+SPRW:		.WORD	0		; width class, 2 or 3
+SPRMIR:		.WORD	0		; mirror flag
+SPRADR:		.WORD	0		; shadow address of the current row
+SPRSHF:		.WORD	0		; sub-cell shift, 0 / 2 / 4 / 6 bits
+SPRB0:		.WORD	0		; the row's source bytes, top to bottom
+SPRB1:		.WORD	0
+SPRB2:		.WORD	0
+SPRDR0:		.WORD	0		; touched cell rectangle, for the dirty marks
+SPRDR1:		.WORD	0
+SPRDC0:		.WORD	0
+
+;------------------------------------------------------------------------------
+; Draw sprite frame NUMBER -- the head of $C6D6.  Looks the frame data up in
+; the pointer table, derives the mirror flag from bit 7 of the number, and
+; falls into DRAWSPRITE.
+;   R0 = frame number (bit 7 selects the mirrored variant)
+;   R1 = pointer-table base -- L8D80 / L8DC4 / L8DEA (what the ZX patches into
+;        $C6D8; the alternate bases are just L8D80 + an offset)
+;   R2 = X (2-pixel units), R3 = Y (pixels).  Utilizes R0-R5.
+
+DRAWFRAME:
+	MOV	R0, R4			; keep the number for the mirror test
+	BIC	#^C177, R0		; table index -- bits 0-6
+	ASL	R0			; two bytes per entry
+	ADD	R1, R0
+	MOV	(R0), R0		; R0 -> the frame data
+	MOV	R2, R1			; R1 = X
+	MOV	R3, R2			; R2 = Y
+	CLR	R3
+	BIT	#200, R4		; number bit 7 => draw the mirrored variant
+	BEQ	DRAWSPRITE
+	INC	R3
+;	fall through
+
+DRAWSPRITE:
+	MOV	R3, SPRMIR
+	CLR	R3
+	BISB	(R0)+, R3		; byte 0 -- width class in the low nibble
+	BIC	#^C17, R3
+	MOV	R3, SPRW
+	CLR	R3
+	BISB	(R0)+, R3		; byte 1 -- row count
+	MOV	R3, SPRROWS
+	INC	R0			; skip byte 2 -- pad
+	MOV	R0, SPRSRC		; -> the first pixel row
+;
+; shadow address of the first row: SHADOWPIX + Y*PLAYW + byte column
+;
+	CLR	R5
+	MOV	R2, R4			; Y
+	BEQ	20$
+10$:	ADD	#PLAYW, R5		; Y * PLAYW
+	SOB	R4, 10$
+20$:	MOV	R1, R4
+	SUB	#8., R4			; X - 8., X being in 2-pixel units
+	BGE	30$
+	SUB	#PLAYW, R5		; X < 8. => wrap one pixel line up
+30$:	ASR	R4
+	ASR	R4			; / 4 = byte column
+	BIC	#^C37, R4		; on the 32.-byte shadow line
+	MOV	R4, SPRDC0		; keep it for the dirty marks
+	ADD	R4, R5
+	ADD	#SHADOWPIX, R5
+	MOV	R5, SPRADR
+;
+	MOV	R1, R3
+	BIC	#^C3, R3		; X AND 3
+	ASL	R3			; * 2 = the sub-cell shift, in bits
+	MOV	R3, SPRSHF
+;
+; the character-row span, for the dirty marks
+;
+	MOV	R2, R3
+	ASR	R3
+	ASR	R3
+	ASR	R3			; Y / 8. = first character row
+	MOV	R3, SPRDR0
+	MOV	R2, R3
+	ADD	SPRROWS, R3
+	DEC	R3
+	ASR	R3
+	ASR	R3
+	ASR	R3			; last character row
+	MOV	R3, SPRDR1
+;
+; plot the rows
+;
+40$:	TST	SPRROWS
+	BEQ	80$
+	DEC	SPRROWS
+;
+; fetch this row's source bytes into SPRB0..SPRB2
+;
+	MOV	SPRSRC, R2
+	CLR	R0
+	BISB	(R2)+, R0		; top byte
+	CLR	R1
+	BISB	(R2)+, R1		; middle byte
+	CLR	R3
+	CMP	SPRW, #3
+	BLT	42$
+	BISB	(R2)+, R3		; bottom byte, class 3 only
+42$:	MOV	R2, SPRSRC		; -> the next row
+	TST	SPRMIR
+	BEQ	48$
+	MOVB	LFD00(R0), R0		; mirrored: reverse each byte and the order
+	MOVB	LFD00(R1), R1
+	MOVB	LFD00(R3), R3
+	MOV	R3, SPRB0
+	MOV	R1, SPRB1
+	MOV	R0, SPRB2
+	BR	50$
+48$:	MOV	R0, SPRB0
+	MOV	R1, SPRB1
+	MOV	R3, SPRB2
+;
+; shift [ b0 : b1 : b2 : 00 ] right by SPRSHF bits into R4 (b0:b1), R5 (b2:00)
+;
+50$:	MOV	SPRB0, R4
+	SWAB	R4
+	BIS	SPRB1, R4		; R4 = b0 : b1
+	MOV	SPRB2, R5
+	SWAB	R5			; R5 = b2 : 00
+	MOV	SPRSHF, R3
+	BEQ	60$
+52$:	CLC
+	ROR	R4
+	ROR	R5
+	DEC	R3
+	BNE	52$
+;
+; XOR the four bytes into the shadow row
+;
+60$:	MOV	SPRADR, R3
+	MOV	R4, R0
+	SWAB	R0
+	CALL	SPRXOR
+	INC	R3
+	MOV	R4, R0
+	CALL	SPRXOR
+	INC	R3
+	MOV	R5, R0
+	SWAB	R0
+	CALL	SPRXOR
+	INC	R3
+	MOV	R5, R0
+	CALL	SPRXOR
+;
+	ADD	#PLAYW, SPRADR		; next pixel line
+	BR	40$
+;
+; mark the touched cells dirty -- SPRDC0 .. SPRDC0+3 across SPRDR0 .. SPRDR1
+;
+80$:	MOV	SPRDR0, R1
+82$:	CMP	R1, SPRDR1
+	BGT	90$
+	MOV	R1, R2
+	ASL	R2
+	ASL	R2
+	ASL	R2
+	ASL	R2
+	ASL	R2			; row * 32.
+	ADD	SPRDC0, R2
+	MOV	#4, R3
+84$:	MOVB	#1, DIRTYCELLS(R2)
+	INC	R2
+	DEC	R3
+	BNE	84$
+	INC	R1
+	BR	82$
+90$:	RETURN
+
+; XOR the low byte of R0 into the byte at (R3).  Utilizes R0, R1.
+; (R4 and R5 hold the row's shifted bytes across all four calls, so this must
+; not touch them.)
+SPRXOR:
+	BIC	#^C377, R0
+	CLR	R1
+	BISB	(R3), R1
+	XOR	R0, R1
+	MOVB	R1, (R3)
+	RETURN
+
+;------------------------------------------------------------------------------
 ; Game entry point, called from START in ROBIN1.MAC.
 
 GAMEMAIN:
@@ -675,6 +885,29 @@ GAMEMAIN:
 ;
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
+	MOV	#0, R0			; !!TEST!! Robin frame 0 (via the number table)
+	MOV	#L8D80, R1		; Robin's frame-pointer-table base
+	MOV	#40., R2		; X in 2-pixel units
+	MOV	#100., R3		; Y in pixels
+	CALL	DRAWFRAME
+; paint a green attribute over the sprite's cells so the XORed pixels show
+	MOV	#SPRDR0, R4
+	MOV	(R4)+, R1		; first char row
+50$:	CMP	R1, SPRDR1
+	BGT	55$
+	MOV	R1, R2
+	.REPT	5
+	ASL	R2
+	.ENDR
+	ADD	SPRDC0, R2
+	MOV	#4, R3
+52$:	MOVB	#4, SHADOWATR(R2)
+	INC	R2
+	DEC	R3
+	BNE	52$
+	INC	R1
+	BR	50$
+55$:	CALL	DRAWALL
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
