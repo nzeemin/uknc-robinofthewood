@@ -31,9 +31,9 @@ DRAWALLNEXT:
 	SOB	R1, DRAWALLROW
 	RETURN
 
-; Emit one cell into the ring.
+; Emit one cell into the ring.  (The dirty flag doubles as the sprite ramp
+; colour, so it is not cleared until after the attribute is taken, below.)
 DRAWCELL:
-	CLRB	DIRTYCELLS(R3)		; clear the "needs a flush" flag
 ; Claim the next record in the Tile Buffer
 	MOV	TLBUFA, R3
 	ADD	#10., R3		; to next record
@@ -51,9 +51,14 @@ DRAWCELL:
 20$:	MOVB	(R2), (R3)+
 	ADD	#PLAYW, R2		; next pixel line
 	SOB	R0, 20$
-; Copy the attribute byte
+; Copy the attribute: the room's, or the sprite's ramp colour where the room
+; left SHADOWATR at 0 -- the port of $C85C's $00-shadow-attr fallback.
 	MOV	CELLOFS, R2
-	MOVB	SHADOWATR(R2), (R3)
+	MOVB	SHADOWATR(R2), R0
+	BNE	25$
+	MOVB	DIRTYCELLS(R2), R0
+25$:	MOVB	R0, (R3)
+	CLRB	DIRTYCELLS(R2)		; now clear the "needs a flush" flag
 ; Publish the record
 	MOV	TLBUFA, R3
 	MOV	SCRADR, -2(R3)		; write screen address - mark record to draw
@@ -704,6 +709,8 @@ SPRB2:		.WORD	0
 SPRDR0:		.WORD	0		; touched cell rectangle, for the dirty marks
 SPRDR1:		.WORD	0
 SPRDC0:		.WORD	0
+SPRFLAG:	.WORD	0		; frame flag byte -- colour select + repeat bits
+SPRRAMP:	.WORD	0		; -> the chosen start in the L8E1C colour ramp
 
 ;------------------------------------------------------------------------------
 ; Draw sprite frame NUMBER -- the head of $C6D6.  Looks the frame data up in
@@ -737,8 +744,15 @@ DRAWSPRITE:
 	CLR	R3
 	BISB	(R0)+, R3		; byte 1 -- row count
 	MOV	R3, SPRROWS
-	INC	R0			; skip byte 2 -- pad
+	CLR	R3
+	BISB	(R0)+, R3		; byte 2 -- flag byte (colour + repeat bits)
+	MOV	R3, SPRFLAG
 	MOV	R0, SPRSRC		; -> the first pixel row
+; ramp start for the cell-colour stamp: L8E12[(flag << 1) AND 0177]
+	ASL	R3
+	BIC	#^C177, R3
+	ADD	#L8E12, R3
+	MOV	(R3), SPRRAMP
 ;
 ; shadow address of the first row: SHADOWPIX + Y*PLAYW + byte column
 ;
@@ -800,8 +814,11 @@ DRAWSPRITE:
 	TST	SPRMIR
 	BEQ	48$
 	MOVB	LFD00(R0), R0		; mirrored: reverse each byte and the order
+	BIC	#^C377, R0		; MOVB sign-extends -- keep the low byte only
 	MOVB	LFD00(R1), R1
+	BIC	#^C377, R1
 	MOVB	LFD00(R3), R3
+	BIC	#^C377, R3
 	MOV	R3, SPRB0
 	MOV	R1, SPRB1
 	MOV	R0, SPRB2
@@ -845,9 +862,12 @@ DRAWSPRITE:
 	ADD	#PLAYW, SPRADR		; next pixel line
 	BR	40$
 ;
-; mark the touched cells dirty -- SPRDC0 .. SPRDC0+3 across SPRDR0 .. SPRDR1
+; stamp the cell-colour ramp into DIRTYCELLS over the footprint -- the port of
+; $C790.  SPRDC0 .. SPRDC0+3 across SPRDR0 .. SPRDR1.  The ramp cursor runs
+; continuously; flag bit 7 steps it per cell, bit 6 per row, neither => flat.
 ;
-80$:	MOV	SPRDR0, R1
+80$:	MOV	SPRRAMP, R5		; running ramp cursor
+	MOV	SPRDR0, R1
 82$:	CMP	R1, SPRDR1
 	BGT	90$
 	MOV	R1, R2
@@ -858,11 +878,17 @@ DRAWSPRITE:
 	ASL	R2			; row * 32.
 	ADD	SPRDC0, R2
 	MOV	#4, R3
-84$:	MOVB	#1, DIRTYCELLS(R2)
-	INC	R2
+84$:	MOVB	(R5), DIRTYCELLS(R2)	; the cell's colour, from the ramp
+	BIT	#200, SPRFLAG		; bit 7 => step the ramp per cell
+	BEQ	85$
+	INC	R5
+85$:	INC	R2
 	DEC	R3
 	BNE	84$
-	INC	R1
+	BIT	#100, SPRFLAG		; bit 6 => step the ramp per row
+	BEQ	86$
+	INC	R5
+86$:	INC	R1
 	BR	82$
 90$:	RETURN
 
@@ -885,29 +911,29 @@ GAMEMAIN:
 ;
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
-	MOV	#0, R0			; !!TEST!! Robin frame 0 (via the number table)
-	MOV	#L8D80, R1		; Robin's frame-pointer-table base
-	MOV	#40., R2		; X in 2-pixel units
-	MOV	#100., R3		; Y in pixels
+; !!TEST!! four actors on the empty lower band -- each should take its own ramp
+; colour with no manual attribute fill
+	MOV	#0, R0			; Robin walk 0 -- green
+	MOV	#L8D80, R1
+	MOV	#16., R2
+	MOV	#96., R3
 	CALL	DRAWFRAME
-; paint a green attribute over the sprite's cells so the XORed pixels show
-	MOV	#SPRDR0, R4
-	MOV	(R4)+, R1		; first char row
-50$:	CMP	R1, SPRDR1
-	BGT	55$
-	MOV	R1, R2
-	.REPT	5
-	ASL	R2
-	.ENDR
-	ADD	SPRDC0, R2
-	MOV	#4, R3
-52$:	MOVB	#4, SHADOWATR(R2)
-	INC	R2
-	DEC	R3
-	BNE	52$
-	INC	R1
-	BR	50$
-55$:	CALL	DRAWALL
+	MOV	#0, R0			; guard right 0 -- cyan
+	MOV	#L8DC4, R1
+	MOV	#40., R2
+	MOV	#96., R3
+	CALL	DRAWFRAME
+	MOV	#3, R0			; Bishop frame 0 -- magenta
+	MOV	#L8DEA, R1
+	MOV	#64., R2
+	MOV	#96., R3
+	CALL	DRAWFRAME
+	MOV	#16., R0		; boar frame 0 -- red
+	MOV	#L8DEA, R1
+	MOV	#88., R2
+	MOV	#104., R3
+	CALL	DRAWFRAME
+	CALL	DRAWALL
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
@@ -951,6 +977,26 @@ L8DEA:					; frame base used by $C6D8 for other actors
 	.WORD	LA230,LA26D,LA2AA,LA83C,LA89F,LA902,LA45E,LA4C1	; frames 0.-7.
 	.WORD	LA524,LA587,LA5EA,LA64D,LA6B0,LA713,LA776,LA7D9	; frames 8.-15.
 	.WORD	LA965,LA998,LA9CB,LA9FE	; frames 16.-19.
+
+;------------------------------------------------------------------------------
+; Sprite cell-colour ramp and its selector table -- the port of $8E1C / $8E12,
+; used by $C790.
+;
+; L8E1C is a fixed 8-byte attribute ramp shared by every actor (BRIGHT dropped
+; here).  A frame's flag byte -- its 3rd header byte -- picks a start point in
+; the ramp through L8E12 (5 words, entry = flag AND 077): Robin 0 -> green,
+; guard $41 -> cyan, Hermit $02 -> white, Bishop $03 -> magenta, boar $04 ->
+; red.  Flag bit 7 advances the ramp one step per cell across a row, bit 6 one
+; step per row; with neither the actor is a single flat colour.
+;
+; STAMPCOLOR (below, folded into DRAWSPRITE) copies the chosen ramp bytes into
+; DIRTYCELLS over the sprite's footprint.  DRAWCELL then uses a cell's ramp
+; byte as its attribute wherever the room left SHADOWATR at 0 -- so an actor
+; shows in its own colour over untiled black and tints to the scenery colour
+; where a block painted one.
+
+L8E1C:	.BYTE	004,005,007,005,005,007,003,002	; green cyan white cyan cyan white magenta red
+L8E12:	.WORD	L8E1C, L8E1C+1, L8E1C+5, L8E1C+6, L8E1C+7
 
 ;------------------------------------------------------------------------------
 ; World map, ZX $79F9 -- one byte per room, 16. columns x 20. rows.
