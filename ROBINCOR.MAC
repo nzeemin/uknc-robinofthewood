@@ -1076,10 +1076,102 @@ OBJSTEP:
 90$:	RETURN
 
 ;------------------------------------------------------------------------------
-; Advance Robin one step: read input, step the pixel position, run the state
-; machine to choose the frame list, then hand off to OBJSTEP.  The port of the
-; ZX chain $C6A2 -> $C95A (position) -> $C9E7/$CD42 (state) -> $C8F7 (frame).
-; No cell-boundary gating, no block/attribute collision, no action system yet.
+; Pixel X/Y -> shadow-attribute cell address -- the port of the ZX $DDD6.
+;   R2 = X (2-pixel units), R3 = Y (pixels).  Returns R0 = the cell address.
+;   Clobbers R0, R1; preserves R2, R3.
+
+ATRADDR:
+	MOV	R3, R0
+	ASR	R0
+	ASR	R0
+	ASR	R0			; Y >> 3 = character row
+	MOV	R0, R1
+	.REPT	5
+	ASL	R1
+	.ENDR				; row * 32.
+	MOV	R2, R0
+	ASR	R0
+	ASR	R0			; X >> 2 = column
+	ADD	R0, R1
+	SUB	#2, R1			; the ZX -2 column bias
+	ADD	#SHADOWATR, R1
+	MOV	R1, R0
+	RETURN
+
+;------------------------------------------------------------------------------
+; Can Robin step one cell in direction R5 (a PKEY bit) from X=R2, Y=R3?
+; Port of the ZX $DD6F / $DD80 / $DD93 / $DD9F + $DDB1 / $DDC5.  Only tests on a
+; cell boundary (X&3 for L/R, Y&7 for U/D); off a boundary the move is allowed.
+; Probe cells are offset past Robin's leading edge exactly as the ZX does:
+; blocked if any covered SHADOWATR byte is non-zero.
+;   Returns R0 = 0 clear / non-zero blocked.  Clobbers R0-R3, R5.
+
+CANMOVE:
+	CMP	R5, #PKEYRT
+	BEQ	10$
+	CMP	R5, #PKEYLT
+	BEQ	20$
+	CMP	R5, #PKEYDN
+	BEQ	30$
+; up: Y&7 gate, 3 cells across the row at the base
+	MOV	R3, R0
+	BIC	#^C7, R0
+	BNE	80$
+	CALL	ATRADDR
+	MOV	R0, R1
+	MOV	#3, R2
+	MOV	#1, R3
+	BR	70$
+; right: X&3 gate, +1 row +3 cols, 2 cells one row apart
+10$:	MOV	R2, R0
+	BIC	#^C3, R0
+	BNE	80$
+	CALL	ATRADDR
+	MOV	R0, R1
+	ADD	#<32.+3>, R1
+	MOV	#2, R2
+	MOV	#32., R3
+	BR	70$
+; left: X&3 gate, +1 row -1 col, 2 cells one row apart
+20$:	MOV	R2, R0
+	BIC	#^C3, R0
+	BNE	80$
+	CALL	ATRADDR
+	MOV	R0, R1
+	ADD	#<32.-1>, R1
+	MOV	#2, R2
+	MOV	#32., R3
+	BR	70$
+; down: Y&7 gate, +3 rows, 3 cells across
+30$:	MOV	R3, R0
+	BIC	#^C7, R0
+	BNE	80$
+	CALL	ATRADDR
+	MOV	R0, R1
+	ADD	#<3*32.>, R1
+	MOV	#3, R2
+	MOV	#1, R3
+; test R2 cells from R1, stride R3
+70$:	CLR	R0
+72$:	TSTB	(R1)
+	BEQ	74$
+	INC	R0			; a tiled cell -- blocked
+	RETURN
+74$:	ADD	R3, R1
+	SOB	R2, 72$
+	RETURN				; R0 = 0, clear
+80$:	CLR	R0			; not on a cell boundary => allowed
+	RETURN
+
+CMTMPX:	.WORD	0		; Robin's position while the axis gates run
+CMTMPY:	.WORD	0
+
+;------------------------------------------------------------------------------
+; Advance Robin one step: read input, step the pixel position (each axis gated
+; by a wall check), run the state machine to choose the frame list, then hand
+; off to OBJSTEP.  The port of the ZX chain $C6A2 -> $C95A (position +
+; collision) -> $C9E7/$CD42 (state) -> $C8F7 (frame).  No "changed direction
+; only on a boundary" filter, no action system yet.
 
 RSTEPX	= 2.			; X move per step, in 2-pixel units (= 4 px)
 RSTEPY	= 4.			; Y move per step, in pixels
@@ -1094,31 +1186,62 @@ MOVEROBIN:
 	BIC	#^C<RDIRS>, R0		; direction bits only
 	MOV	R0, -(SP)		; keep for the state machine
 ;
-; step the next-slot position (offsets 9 / 10)
+; step the pixel position (offsets 9 / 10), each axis gated by CANMOVE
 ;
 	CLR	R2
 	BISB	9.(R4), R2
+	MOV	R2, CMTMPX		; Robin's current X
 	CLR	R3
 	BISB	10.(R4), R3
+	MOV	R3, CMTMPY		; Robin's current Y
+;
 	BIT	#PKEYLT, R0
 	BEQ	1$
-	SUB	#RSTEPX, R2
-1$:	BIT	#PKEYRT, R0
+	MOV	CMTMPX, R2
+	MOV	CMTMPY, R3
+	MOV	#PKEYLT, R5
+	CALL	CANMOVE
+	TST	R0
+	BNE	1$
+	SUB	#RSTEPX, CMTMPX
+1$:	MOV	(SP), R0
+	BIT	#PKEYRT, R0
 	BEQ	2$
-	ADD	#RSTEPX, R2
-2$:	BIT	#PKEYUP, R0
+	MOV	CMTMPX, R2
+	MOV	CMTMPY, R3
+	MOV	#PKEYRT, R5
+	CALL	CANMOVE
+	TST	R0
+	BNE	2$
+	ADD	#RSTEPX, CMTMPX
+2$:	MOV	(SP), R0
+	BIT	#PKEYUP, R0
 	BEQ	3$
-	SUB	#RSTEPY, R3
-3$:	BIT	#PKEYDN, R0
+	MOV	CMTMPX, R2
+	MOV	CMTMPY, R3
+	MOV	#PKEYUP, R5
+	CALL	CANMOVE
+	TST	R0
+	BNE	3$
+	SUB	#RSTEPY, CMTMPY
+3$:	MOV	(SP), R0
+	BIT	#PKEYDN, R0
 	BEQ	4$
-	ADD	#RSTEPY, R3
-4$:	CMP	R3, #RMINY		; clamp Y (X is ROOMEDGE's job)
+	MOV	CMTMPX, R2
+	MOV	CMTMPY, R3
+	MOV	#PKEYDN, R5
+	CALL	CANMOVE
+	TST	R0
+	BNE	4$
+	ADD	#RSTEPY, CMTMPY
+4$:	MOV	CMTMPY, R3		; clamp Y (X is ROOMEDGE's job)
+	CMP	R3, #RMINY
 	BGE	5$
 	MOV	#RMINY, R3
 5$:	CMP	R3, #RMAXY
 	BLE	6$
 	MOV	#RMAXY, R3
-6$:	MOVB	R2, 9.(R4)
+6$:	MOVB	CMTMPX, 9.(R4)
 	MOVB	R3, 10.(R4)
 ;
 	MOV	(SP)+, R0		; direction mask
