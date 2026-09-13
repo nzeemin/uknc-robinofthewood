@@ -278,6 +278,15 @@ PPSTA:
 	MOV	#200, @#102
 ;
 	CALL	PCLSCR			; Clear screen
+;
+; splice the antler-energy and HUD-resume palette tags into the display list --
+; see the comment above ANTPAL/HUDPAL/SRCPAL for what this is doing
+	MOV	@#SRCPAL, @#ANTPAL
+	MOV	@#<SRCPAL+2>, @#<ANTPAL+2>
+	MOV	#<ANTPAL+6>, @#004016	; line 210 -> 4-word palette tag at ANTPAL
+	MOV	@#SRCPAL, @#HUDPAL
+	MOV	@#<SRCPAL+2>, @#<HUDPAL+2>
+	MOV	#<HUDPAL+6>, @#004116	; line 226 -> 4-word palette tag at HUDPAL
 PDONE:
 	MTPS	#0
 	MOV	#<PPUCOM/2>, @#177010	; ackn of command execution
@@ -443,6 +452,40 @@ PCLSCR:
 	INC	(R4)
 	SOB	R0, 10$
 	RETURN
+
+;------------------------------------------------------------------------------
+; Splice the antler-energy and HUD-resume palette tags into the GAMESC-built
+; display list, in place -- no relocation, no list growth.
+;
+; The list (built by the PPU's own screen firmware from the GAMESC escape
+; string sent in START, before RUNPPU hands the PPU over to us) is packed
+; tight: each entry is either a plain 2-word [addressBits,tagB] or, when the
+; previous entry's tagB announces it, a 4-word [tag1,tag2,addressBits,tagB]
+; palette/params tag.  There is no spare room to insert a tag, so instead we
+; fold two adjacent plain entries into one 4-word tag occupying the same 8
+; bytes, and repoint the entry before it.
+;
+; Splice A -- display-list lines 211+212 (the antler rows) at 004020-004027
+; become one palette tag; line 210's tagB (at 004016) is repointed to it with
+; the size+palette flags (bits 1,2) set.  004024/004026 (yy=211's
+; addressBits/tagB) are left as they were -- yy=211 renders with what was
+; yy=212's pixel row, a one-scanline nudge inside the antler glyph's blank
+; margin, and the chain still lands correctly on the real yy=213 entry.
+;
+; Splice B -- lines 227+228 (HUD resume) at 004120-004127, same idea; line
+; 226's tagB is at 004116.
+;
+; Both new palette tags start as a copy of the main screen palette at
+; 002470/002472, so nothing changes visually until something recolours
+; 004020/004022 (ANTPAL) for the energy display.
+;
+; Each splice drops one entry from the 307-entry chain, but the tail of the
+; list (past ~line 305) is a static self-loop over blank lines -- it just
+; cycles a couple of times fewer before the frame ends, no visible effect.
+
+ANTPAL	= 004020		; the antler tag's [tag1,tag2] -- recolour these
+HUDPAL	= 004120		; the HUD-resume tag's [tag1,tag2]
+SRCPAL	= 002470		; source: the main screen palette, copied at init
 
 VSYINT:
 	RTI

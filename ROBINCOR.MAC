@@ -522,6 +522,10 @@ ENTERROOM:
 	CALL	PRINTSTR
 	MOV	#LB5C0, R0
 	CALL	PRINTSTR
+	MOV	#LD2C3, R0		; the branched antlers -- energy shown via the
+	CALL	PRINTSTR		; display-list palette splice, not their attrs
+	MOV	#LD305, R0
+	CALL	PRINTSTR
 	CALL	DRAWROOM		; $C072
 	;TODO: $C15E -- scenario decoration in the 3 random opening rooms
 	;TODO: $C444 -- room $BB special recolour
@@ -932,6 +936,8 @@ SPRXOR:
 NOBJ	= 6.			; Robin + up to 5 guests
 OBJSZ	= 11.
 
+	.EVEN				; keep every entry's word fields (2/3, 8/9-as-word...)
+					; at a consistent, even-safe offset from OBJTAB
 OBJTAB:		.BLKB	NOBJ*OBJSZ
 ROBIN	= OBJTAB		; entry 0 is Robin
 
@@ -942,14 +948,269 @@ RSPAWNX	= 8. + <12.*4>		; play-area cell column 12., in X units
 RSPAWNY	= 8.*8.			; play-area cell row 8., in pixels
 
 ;------------------------------------------------------------------------------
+; Tiny PRNG -- a 16-bit Galois LFSR (taps x^16+x^14+x^13+x^11+1), standing in
+; for the ZX's $CE6D "stir the R register" trick: the UKNC has no equivalent
+; free-running noise source to sample, so this is a real generator instead.
+; Period up to 65535.; the seed must stay non-zero, hence RNGINIT's guard.
+
+RNGSEED:	.WORD	1
+
+; Reseed from the live frame counter, so each run differs.  Call once at boot,
+; after CPUVSY so FRAMES is actually ticking.  Utilizes R0.
+RNGINIT:
+	MOV	FRAMES, R0
+	BNE	10$
+	INC	R0			; keep the seed non-zero
+10$:	MOV	R0, RNGSEED
+	RETURN
+
+; R0 := next pseudo-random byte (0-377 octal), advances RNGSEED.
+; Utilizes R0, R1.
+PRNG:
+	MOV	RNGSEED, R0
+	CLC
+	ROR	R0			; logical shift right -- old bit 0 -> C
+	BCC	10$
+	MOV	#46080., R1		; the LFSR tap mask, XORed in on a 1 bit out
+	XOR	R1, R0
+10$:	MOV	R0, RNGSEED
+	BIC	#^C377, R0		; the caller gets the low byte
+	RETURN
+
+GSPCLR:					; clear OBJSZ bytes at R4, preserving R4
+	MOV	R4, -(SP)
+	MOV	#OBJSZ, R0
+10$:	CLRB	(R4)+
+	SOB	R0, 10$
+	MOV	(SP)+, R4
+	RETURN
+
+;------------------------------------------------------------------------------
+; The per-room guard seed table -- the port of the ZX $8A39.  4 room-groups x
+; 4 guard slots x 3 bytes: byte 0 = a "home" value tested against the room's
+; column nibble to decide presence, byte 1 = unused until $DEAB/movement is
+; ported, byte 2 bit 7 = which walk-cycle a present guard starts on.
+;
+; A room's group is bits 4-5 of (room number - 32.), same bucketing $C3FA
+; does -- 4 buckets shared across many rooms, not one entry per room.
+
+GSEED:	.BLKB	4*4*3
+GGROUP:	.WORD	0		; this room's group base in GSEED, set by GROUPADR
+
+; Fill the whole table with fresh randomness -- the port of $CE0A's guard-seed
+; loop.  Call once at game start, after RNGINIT.  R3 (not R1) is the loop
+; counter -- CALL PRNG itself clobbers R1.  Utilizes R0, R3, R4.
+GSEEDINIT:
+	MOV	#GSEED, R4
+	MOV	#16., R3		; 4 groups x 4 guards
+10$:	CALL	PRNG
+	BIC	#^C17, R0		; byte 0: random AND 0x0F
+	MOVB	R0, (R4)+
+	CALL	PRNG
+	MOVB	R0, (R4)+		; byte 1: random, full byte
+	CALL	PRNG
+	BIC	#^C200, R0		; byte 2: random AND 0x80 (bit 7 only)
+	MOVB	R0, (R4)+
+	SOB	R3, 10$
+	RETURN
+
+; R0 := the GSEED group base address for CURROOM -- the port of $C3FA, applied
+; to our CURROOM the same way $C548 feeds it (both are the same packed
+; room-index scheme).  Logical shifts throughout (CLC/ROR, not ASR) since
+; CURROOM - 32. can go negative for the first 32. rooms and ASR would sign-fill
+; from that.  Utilizes R0, R1.
+GROUPADR:
+	MOV	CURROOM, R0
+	SUB	#32., R0
+	.REPT	4
+	CLC
+	ROR	R0
+	.ENDR				; (room-32.) >> 4, logical
+	BIC	#^C3, R0		; & 3 -- group 0-3
+	MOV	R0, R1
+	ASL	R0
+	ASL	R0
+	ASL	R0			; group * 8.
+	ASL	R1
+	ASL	R1			; group * 4.
+	ADD	R1, R0			; group * 12.
+	ADD	#GSEED, R0
+	RETURN
+
+; Re-roll one room-group's 4 guard seeds -- the port of $C276's $C282-$C28F
+; loop.  Runs on every room entry, not just once, so a guard's presence
+; reshuffles each time you come back.  Utilizes R0-R4.
+GUARDROLL:
+	CALL	GROUPADR
+	MOV	R0, GGROUP
+	MOV	R0, R4
+	MOV	#4, R3
+10$:	CALL	PRNG			; R0 = a fresh random byte
+	CLR	R1
+	BISB	(R4), R1		; XOR it into the existing byte 0...
+	XOR	R0, R1
+	BIC	#^C17, R1		; ...masked back to 0-15
+	MOVB	R1, (R4)
+	BICB	#60, 2(R4)		; clear byte 2 bits 4-5
+	ADD	#3, R4			; next guard's 3-byte entry
+	SOB	R3, 10$
+	RETURN
+
+; Is the guard whose GSEED entry is at R4 present in CURROOM?  The port of
+; $AA5A-$AA67's proximity test (column distance, folded to 0-15, "within 3").
+; R0 := the folded distance (present if < 3).  Utilizes R0, R1.
+GPRESENT:
+	MOV	CURROOM, R0
+	BIC	#^C17, R0		; this room's column nibble
+	CLR	R1
+	BISB	(R4), R1		; the guard's seed byte 0
+	SUB	R1, R0
+	NEG	R0
+	INC	R0
+	BIC	#^C17, R0
+	RETURN
+
+;------------------------------------------------------------------------------
+; Phase 1 guard spawn -- real object-table entries, static (no $AA31 step, no
+; movement) until Phase 2 lands.  Which of the 4 slots are actually present
+; now varies by room and reshuffles on every visit (GUARDROLL + GPRESENT,
+; above); only the spawn X/Y and starting frame below are still placeholders.
+;
+; Record fields, frame base (L8DC4) and frame-list format are all faithful, so
+; a guard is a first-class OBJSTEP-compatible object from the start -- future
+; sword/arrow hit-testing or movement needs no record-format change, only a
+; CALL OBJSTEP added to the game loop for these slots.
+;
+; Y = 80. is not a placeholder -- it's the ZX's own static ROM data: every one
+; of $AC13's 5 entries (all 4 room guards and Bishop's escort) ships with
+; offset +0A = $50 (80.), and nothing in $C276 or $AA31 ever writes it again.
+; Every guard sits at that one fixed row, in every room, for the whole game --
+; confirmed against the disassembly, not a simplification on our part.
+;
+; X *is* still a stand-in.  $C276 doesn't set a guard's X either -- it's
+; resolved live by $AA31/$DDF0 from the $DEAB route table keyed on the guard's
+; home-room nibble, and $DEAB's real content is an open, contradictory
+; question in the source disassembly itself (reads all-zero live, but as
+; code-shaped bytes in the static listing) -- not a gap in this port.
+; Swapping in real X values later only touches this table.  Confirmed
+; separately: the ZX never validates a guard's resolved position against
+; room attributes either (no equivalent of Robin's $DD6F-family checks in
+; $AA31/$C276/$DDF0) -- placement safety on the real game comes entirely from
+; $DEAB's curated data, which is exactly what we don't have yet.
+;
+; The frame-list choice (LAC51, the backward walk cycle) IS faithful, not a
+; guess: $C276 picks it from bits 4/7 of a per-guard byte in $8A39; GUARDROLL
+; keeps those bits zero the same way $CE0A's fresh seed can, so LAC51 -- what
+; $C276 selects on a zero byte -- has no fixed "correct" alternative to diverge
+; from either.
+
+GUARDINIT:
+	CALL	GROUPADR
+	MOV	R0, GGROUP
+;
+	MOV	GGROUP, R4		; guard 1 -- object slot 1 (0 is Robin)
+	CALL	GPRESENT
+	MOV	R0, R5			; GSPCLR clobbers R0 -- keep the distance in R5
+	MOV	#<OBJTAB+OBJSZ>, R4
+	CALL	GSPCLR
+	CMP	R5, #3
+	BHIS	20$
+	MOVB	#3, 4(R4)		; active + erase-armed
+	MOVB	#0, 5(R4)
+	MOVB	#24., 6(R4)
+	MOVB	#80., 7(R4)
+	MOVB	#0, 8.(R4)
+	MOVB	#24., 9.(R4)
+	MOVB	#80., 10.(R4)
+	MOV	#LAC51, 2(R4)
+	MOV	#0, R0
+	MOV	#L8DC4, R1
+	MOV	#24., R2
+	MOV	#80., R3
+	CALL	DRAWFRAME
+20$:
+;
+	MOV	GGROUP, R4		; guard 2 -- mirrored, facing left
+	ADD	#3, R4
+	CALL	GPRESENT
+	MOV	R0, R5
+	MOV	#<OBJTAB+2*OBJSZ>, R4
+	CALL	GSPCLR
+	CMP	R5, #3
+	BHIS	21$
+	MOVB	#3, 4(R4)
+	MOVB	#200, 5(R4)
+	MOVB	#48., 6(R4)
+	MOVB	#80., 7(R4)
+	MOVB	#200, 8.(R4)
+	MOVB	#48., 9.(R4)
+	MOVB	#80., 10.(R4)
+	MOV	#LAC51, 2(R4)
+	MOV	#200, R0
+	MOV	#L8DC4, R1
+	MOV	#48., R2
+	MOV	#80., R3
+	CALL	DRAWFRAME
+21$:
+;
+	MOV	GGROUP, R4		; guard 3
+	ADD	#6, R4
+	CALL	GPRESENT
+	MOV	R0, R5
+	MOV	#<OBJTAB+3*OBJSZ>, R4
+	CALL	GSPCLR
+	CMP	R5, #3
+	BHIS	22$
+	MOVB	#3, 4(R4)
+	MOVB	#0, 5(R4)
+	MOVB	#96., 6(R4)
+	MOVB	#80., 7(R4)
+	MOVB	#0, 8.(R4)
+	MOVB	#96., 9.(R4)
+	MOVB	#80., 10.(R4)
+	MOV	#LAC51, 2(R4)
+	MOV	#0, R0
+	MOV	#L8DC4, R1
+	MOV	#96., R2
+	MOV	#80., R3
+	CALL	DRAWFRAME
+22$:
+;
+	MOV	GGROUP, R4		; guard 4
+	ADD	#11, R4
+	CALL	GPRESENT
+	MOV	R0, R5
+	MOV	#<OBJTAB+4*OBJSZ>, R4
+	CALL	GSPCLR
+	CMP	R5, #3
+	BHIS	23$
+	MOVB	#3, 4(R4)
+	MOVB	#200, 5(R4)
+	MOVB	#72., 6(R4)
+	MOVB	#80., 7(R4)
+	MOVB	#200, 8.(R4)
+	MOVB	#72., 9.(R4)
+	MOVB	#80., 10.(R4)
+	MOV	#LAC51, 2(R4)
+	MOV	#200, R0
+	MOV	#L8DC4, R1
+	MOV	#72., R2
+	MOV	#80., R3
+	CALL	DRAWFRAME
+23$:	RETURN
+
+;------------------------------------------------------------------------------
 ; Game entry point, called from START in ROBIN1.MAC.
 
 GAMEMAIN:
 	CALL	RUNPPU			; start the PPU renderer
 	CALL	CPUVSY			; start the vsync frame counter
+	CALL	RNGINIT			; reseed the PRNG from the live frame counter
+	CALL	GSEEDINIT		; fill the guard seed table (ZX $CE0A)
 ;
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
+	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
@@ -974,6 +1235,8 @@ GAMEMAIN:
 	MOV	#RSPAWNX, R2
 	MOV	#RSPAWNY, R3
 	CALL	DRAWFRAME
+;
+	CALL	GUARDINIT		; !!TEMP!! Phase 1: static test guards, see the note above it
 ;
 GAMELOOP:
 	MOV	FRAMES, GAMEFRAME	; remember frame number
@@ -1395,6 +1658,16 @@ LTURNL:	.BYTE	015, 377, <LRUNLL&377>, <LRUNLL/400>	; 1 lead-in, then run-left lo
 LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
 	.EVEN
 
+; Guard walk-cycle frame lists, ZX $AC51/$AC5C -- the two "plain walk" lists
+; $C276 picks between (the turn lead-ins and the $AC7B idle-away list aren't
+; needed until guards actually move).
+
+LAC51:	.BYTE	013, 012, 011, 010, 013, 012, 011, 010, 377	; backward walk
+	.BYTE	<LAC51&377>, <LAC51/400>
+LAC5C:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 377	; forward walk
+	.BYTE	<LAC5C&377>, <LAC5C/400>
+	.EVEN
+
 ;------------------------------------------------------------------------------
 ; If Robin has walked off an edge, wrap him to the opposite side and step
 ; CURROOM to the neighbouring room on the world map, then rebuild the room.
@@ -1468,6 +1741,8 @@ ROOMEDGE:
 ;
 80$:	MOV	R0, CURROOM
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
+	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
+	CALL	GUARDINIT		; !!TEMP!! placeholder spawn spots, gated by GPRESENT
 ;
 	MOV	#ROBIN, R4
 	BISB	#2, 4(R4)		; we redraw Robin below -- next step must erase it
