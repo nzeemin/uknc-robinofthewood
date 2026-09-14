@@ -549,21 +549,24 @@ ENTERROOM:
 ; Placement/collection/carrying ($D4AD/$D7F3/$D595/the Ent) are not ported;
 ; the icon is drawn every room entry and never goes away.
 
-OBJLOGN	= 5				; live-table slots (this port's own size)
+OBJLOGN	= 2				; live-table slots (this port's own size)
 
-; room, char column, char row, -> icon string, type (ZX's own $D9F6 values:
-; 1=wreath, 2=gold, 5=flower, 6=key, 7=quiver -- inlined here rather than
-; named, matching how this port already inlines ZX frame/message numbers
-; elsewhere).  All 5 test entries in the fixed test room (GAMEMAIN's 115
-; octal), one per pick-able type; icon data is ROBININD.MAC's verbatim ZX
-; strings, +1/+2 skipping each one's own leading pad byte or position
-; header as established earlier this session.
+; room, X, Y, -> icon string, type (ZX's own $D9F6 values: 1=wreath, 2=gold,
+; 5=flower, 6=key, 7=quiver -- inlined here rather than named, matching how
+; this port already inlines ZX frame/message numbers elsewhere).  X/Y are
+; in the exact same coordinate units as Robin's own ROBIN+6/+7 fields --
+; X in 2-pixel units, Y in real pixels -- not character cells, so OBJPICKUP
+; can compare them against Robin's position with no unit conversion.  All 5
+; test entries in the fixed test room (GAMEMAIN's 115 octal), one per
+; pick-able type; icon data is ROBININD.MAC's verbatim ZX strings, +1/+2
+; skipping each one's own leading pad byte or position header as
+; established earlier this session.
 OBJLOG:
-	.WORD	115, 6.,  10., LB536+1, 1	; wreath
-	.WORD	115, 10., 10., LB512+1, 2	; gold
-	.WORD	115, 20., 10., LB548+1, 5	; flower
-	.WORD	115, 24., 10., LB52E, 6	; key (no header to skip)
-	.WORD	115, 8., 12.,  LB57C+1, 7	; quiver (laying/world variant)
+	.WORD	115, 16.,  80., LB536+1, 1	; wreath
+	;.WORD	115, 40., 80., LB512+1, 2	; gold
+	.WORD	115, 80., 80., LB548+1, 5	; flower
+	;.WORD	115, 96., 80., LB52E, 6	; key (no header to skip)
+	;.WORD	115, 32., 96., LB57C+1, 7	; quiver (laying/world variant)
 
 ; Scan OBJLOG for CURROOM; PRINTGAME every match's icon (a room can now
 ; hold more than one live pickup).  Utilizes R0-R5.
@@ -573,8 +576,13 @@ OBJSHOW:
 10$:	MOV	(R4), R0
 	CMP	R0, CURROOM
 	BNE	20$
-	MOV	2(R4), R1		; character column
-	MOV	4(R4), R2		; character row
+	MOV	2(R4), R1		; X, 2-pixel units -> char column = X/4.
+	ASR	R1
+	ASR	R1
+	MOV	4(R4), R2		; Y, real pixels -> char row = Y/8.
+	ASR	R2
+	ASR	R2
+	ASR	R2
 	MOV	6(R4), R0		; -> the icon string
 	MOV	R4, -(SP)		; PRINTGAME clobbers R0-R5 -- save the scan
 	MOV	R3, -(SP)		; pointer and the loop counter across it
@@ -593,31 +601,40 @@ OBJSHOW:
 ;   Y = $CC86 + $0C,            must satisfy yref <= Y < yref+$10
 ; i.e. X = max(px,24.)-24. in [xref,xref+16.); Y = py+12. in [yref,yref+16.)
 ; -- two independent pixel-precise ranges against the icon's own printed
-; position, not a cell-snapped or sprite-hitbox test.  (px,py) is Robin's
-; real pixel position; (xref,yref) is the icon's, derived from OBJLOG's
-; column/row (each character cell is 8. pixels, matching PRTCOMMITSHADOW's
-; own byte-column-is-pixel-column/8 addressing).
+; position, not a cell-snapped or sprite-hitbox test.  px = 2*field6 (Robin's
+; field 6 is 2-pixel units -- X=64. spawn confirmed live as ZX's screen-
+; centre $40, real pixel px=128.); py = field7 (already real pixels).
+; (xref,yref) is the icon's, straight from OBJLOG's own X/Y -- stored in
+; the same 2-pixel-unit/real-pixel coordinate pair as Robin's fields, not
+; character cells, so xref = OBJLOG.X * 2. and yref = OBJLOG.Y with no
+; further conversion.
 ;
-; Utilizes R0-R4.
+; Utilizes R0-R5.
 
 RPPX:	.WORD	0			; Robin's real pixel X, this test
 RPPY:	.WORD	0			; Robin's real pixel Y, this test
+
+; !!DEBUG!! 1 = band test still runs and the HUD indicator (DBGSHOWPICK)
+; still shows the hit, but OBJMATCH's actual erase/HUD-effect dispatch is
+; skipped, so pickups can be walked over repeatedly while tuning the zone.
+DBGPICKGATE = 0
 
 OBJPICKUP:
 	MOV	#ROBIN, R4
 	CLR	R0
 	BISB	6(R4), R0		; Robin's X, 2-pixel units
 	ASL	R0			; * 2. = real pixel X
-	CMP	R0, #24.
+	CMP	R0, #4.
 	BGE	1$
-	MOV	#24., R0
-1$:	SUB	#24., R0		; X = max(px,24.) - 24.
+	MOV	#4., R0
+1$:	SUB	#4., R0			; X = max(px,4.) - 4.
 	MOV	R0, RPPX
 	CLR	R0
 	BISB	7(R4), R0		; Robin's Y, already real pixels
 	ADD	#12., R0		; Y = py + 12.
 	MOV	R0, RPPY
 ;
+	CLR	R5			; in-band flag, for DBGSHOWPICK below
 	MOV	#OBJLOG, R4
 	MOV	#OBJLOGN, R3
 10$:	MOV	(R4), R0
@@ -625,31 +642,32 @@ OBJPICKUP:
 	BEQ	20$			; unused slot
 	CMP	R0, CURROOM
 	BNE	20$
-; X band: xref <= RPPX < xref+16., xref = OBJLOG.col * 8.
+; X band: xref <= RPPX < xref+16., xref = OBJLOG.X * 2. (2-pixel units -> real)
 	MOV	2(R4), R1
-	ASL	R1
-	ASL	R1
-	ASL	R1			; * 8. = xref
+	ASL	R1			; * 2. = xref
 	CMP	RPPX, R1
 	BLT	20$
-	ADD	#16., R1
+	ADD	#24., R1
 	CMP	RPPX, R1
 	BGE	20$
-; Y band: yref <= RPPY < yref+16., yref = OBJLOG.row * 8.
+; Y band: yref <= RPPY < yref+16., yref = OBJLOG.Y (already real pixels)
 	MOV	4(R4), R2
-	ASL	R2
-	ASL	R2
-	ASL	R2			; * 8. = yref
 	CMP	RPPY, R2
 	BLT	20$
-	ADD	#16., R2
+	ADD	#24., R2
 	CMP	RPPY, R2
 	BGE	20$
 ;
+	MOV	#1, R5
+	.IF NE DBGPICKGATE
+	BR	20$			; gated: count as a hit but leave the entry live
+	.ENDC
 	JMP	OBJMATCH		; too far for a branch now the dispatch
 					; block sits well past 20$/SOB below
 20$:	ADD	#12, R4			; next entry, 5 words = 12 octal bytes
 	SOB	R3, 10$
+	MOV	R5, R0
+	CALL	DBGSHOWPICK
 	RETURN
 ;
 ; match -- capture the entry's fields and disable it immediately (before
@@ -664,8 +682,13 @@ OBJMATCH:
 					; it, this routine won't retest it
 ;
 	MOV	PKICON, R0
-	MOV	PKCOL, R1
-	MOV	PKROW, R2
+	MOV	PKCOL, R1		; X, 2-pixel units -> char column = X/4.
+	ASR	R1
+	ASR	R1
+	MOV	PKROW, R2		; Y, real pixels -> char row = Y/8.
+	ASR	R2
+	ASR	R2
+	ASR	R2
 	CALL	PRINTERASE		; XOR the world icon's pixels back off
 ;
 	MOV	PKTYPE, R2
@@ -1505,8 +1528,8 @@ ROBIN	= OBJTAB		; entry 0 is Robin
 GAMEFRAME:	.WORD	0
 ;TICKODD:	.WORD	0	; flips every frame; Robin advances on every other one
 
-RSPAWNX	= 8. + <12.*4>		; play-area cell column 12., in X units
-RSPAWNY	= 8.*8.			; play-area cell row 8., in pixels
+RSPAWNX	= 64.			; ZX-confirmed live: $40
+RSPAWNY	= 80.			; ZX-confirmed live: $50
 
 ;------------------------------------------------------------------------------
 ; Tiny PRNG -- a 16-bit Galois LFSR (taps x^16+x^14+x^13+x^11+1), standing in
@@ -1810,6 +1833,23 @@ DBGSHOWROOM:
 	MOV	#<DBGROOM+2>, R4	; -> the 3 glyph bytes
 	CALL	HEXCONV
 	MOV	#DBGROOM, R0
+	CALL	PRINTSTR
+	RETURN
+
+; Debug HUD: single '0'/'1' glyph, left of DBGROOM, showing whether Robin is
+; in a pickup band this frame (OBJPICKUP.R5).  R0 = 0 or 1.  Call every
+; frame -- cheap, one glyph through PRINTSTR.  Utilizes R0, R4.
+DBGPICKCOL = 28.			; play-area column, left of DBGROOM
+DBGPICK:
+	.BYTE	<DBGPICKCOL*4>, <DBGROW*8.>	; position header
+	.BYTE	060, 0			; 1 glyph (filled below) + 000 terminator
+	.BYTE	004, 0			; one attribute + terminator
+
+DBGSHOWPICK:
+	ADD	#60, R0			; 0/1 -> ASCII '0'/'1'
+	MOV	#<DBGPICK+2>, R4
+	MOVB	R0, (R4)
+	MOV	#DBGPICK, R0
 	CALL	PRINTSTR
 	RETURN
 
