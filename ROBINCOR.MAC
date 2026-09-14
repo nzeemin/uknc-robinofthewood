@@ -527,9 +527,13 @@ ENTERROOM:
 	CALL	RECOLORCASTLE		; $C40E
 	;TODO: $C462 -- single-column-room hint message
 	;TODO: $C276 -- build the room's guards / boars
-	CALL	OBJSHOW			; $D5A7's icon half -- this room's pickup, if any
-					; (into the shadow screen, before the flush below)
 	CALL	MARKALLDIRTY
+	CALL	OBJSHOW			; $D5A7's icon half -- this room's pickup, if
+					; any.  After MARKALLDIRTY, not before: it
+					; blanket-stamps DIRTYCELLS to a flat 1 across
+					; the whole play area, which would otherwise
+					; stomp the real colour PRTCOMMITSHADOW just
+					; wrote there back down to 1.
 	CALL	DRAWALL			; flush the room first so the ornaments land on top
 	RETURN
 
@@ -548,7 +552,7 @@ ENTERROOM:
 OBJLOGN	= 4				; live-table slots (this port's own size)
 
 OBJLOG:					; room, char column, char row, -> icon string
-	.WORD	115, 8., 15., LB548+1	; test: a flower, room 115 octal (GAMEMAIN's
+	.WORD	115, 20., 10., LB548+1	; test: a flower, room 115 octal (GAMEMAIN's
 					; fixed test room -- match its own radix).
 					; LB548 (ROBININD.MAC), already ported
 					; verbatim -- +1 skips its leading pad
@@ -569,6 +573,81 @@ OBJSHOW:
 	CALL	PRINTGAME
 	RETURN
 20$:	ADD	#10, R4			; next entry, 4 words = 10 octal bytes
+	SOB	R3, 10$
+	RETURN
+
+;------------------------------------------------------------------------------
+; Pickup collision -- the display-erase half of the ZX $D7F3 pipeline, called
+; once per game frame.  Faithful port of ZX's own pixel-band test (docs/
+; Objects.md, $D7F3):
+;   X = max($CC85, $18) - $18,  must satisfy xref <= X < xref+$10
+;   Y = $CC86 + $0C,            must satisfy yref <= Y < yref+$10
+; i.e. X = max(px,24.)-24. in [xref,xref+16.); Y = py+12. in [yref,yref+16.)
+; -- two independent pixel-precise ranges against the icon's own printed
+; position, not a cell-snapped or sprite-hitbox test.  (px,py) is Robin's
+; real pixel position; (xref,yref) is the icon's, derived from OBJLOG's
+; column/row (each character cell is 8. pixels, matching PRTCOMMITSHADOW's
+; own byte-column-is-pixel-column/8 addressing).
+;
+; Utilizes R0-R4.
+
+RPPX:	.WORD	0			; Robin's real pixel X, this test
+RPPY:	.WORD	0			; Robin's real pixel Y, this test
+
+OBJPICKUP:
+	MOV	#ROBIN, R4
+	CLR	R0
+	BISB	6(R4), R0		; Robin's X, 2-pixel units
+	ASL	R0			; * 2. = real pixel X
+	CMP	R0, #24.
+	BGE	1$
+	MOV	#24., R0
+1$:	SUB	#24., R0		; X = max(px,24.) - 24.
+	MOV	R0, RPPX
+	CLR	R0
+	BISB	7(R4), R0		; Robin's Y, already real pixels
+	ADD	#12., R0		; Y = py + 12.
+	MOV	R0, RPPY
+;
+	MOV	#OBJLOG, R4
+	MOV	#OBJLOGN, R3
+10$:	MOV	(R4), R0
+	CMP	R0, #-1
+	BEQ	20$			; unused slot
+	CMP	R0, CURROOM
+	BNE	20$
+; X band: xref <= RPPX < xref+16., xref = OBJLOG.col * 8.
+	MOV	2(R4), R1
+	ASL	R1
+	ASL	R1
+	ASL	R1			; * 8. = xref
+	CMP	RPPX, R1
+	BLT	20$
+	ADD	#16., R1
+	CMP	RPPX, R1
+	BGE	20$
+; Y band: yref <= RPPY < yref+16., yref = OBJLOG.row * 8.
+	MOV	4(R4), R2
+	ASL	R2
+	ASL	R2
+	ASL	R2			; * 8. = yref
+	CMP	RPPY, R2
+	BLT	20$
+	ADD	#16., R2
+	CMP	RPPY, R2
+	BGE	20$
+;
+; match -- disable the entry, then XOR its icon's pixels back off via
+; PRINTERASE (same string/column/row PRINTGAME drew it with).
+	MOV	2(R4), R1		; character column
+	MOV	4(R4), R2		; character row
+	MOV	6(R4), R0		; -> the icon string
+	MOV	R4, -(SP)		; PRINTERASE clobbers R4 -- save the entry
+	CALL	PRINTERASE		; pointer across the call
+	MOV	(SP)+, R4
+	MOV	#-1, (R4)		; disable this entry -- OBJSHOW won't redraw
+	RETURN				; it, this routine won't retest it
+20$:	ADD	#10, R4
 	SOB	R3, 10$
 	RETURN
 
@@ -659,6 +738,21 @@ PRINTGAME:
 	MOV	R2, PRTCROW
 	MOV	#PRTCOMMITSHADOW, PRTSINK
 	; PRTPOS/PRTROW stay stale -- PRTCOMMITSHADOW never reads them
+	BR	PRTSETUP
+
+; PRINTERASE -- same string/column/row as the PRINTGAME call that drew an
+; icon, but its sink (PRTCOMMITERASE) XORs the glyph pixels back off
+; instead of setting them, and never touches DIRTYCELLS/attribute at all.
+; XOR is what makes this safe regardless of what else is drawn over the
+; icon's cells in the meantime (Robin's own sprite, say): bg^S^F^F = bg^S,
+; the same font bytes toggled a second time cancel only what they
+; themselves set, with no dependency on draw order the way a direct
+; overwrite would have.
+PRINTERASE:
+	MOV	R1, PRTCOL0
+	MOV	R1, PRTCOL
+	MOV	R2, PRTCROW
+	MOV	#PRTCOMMITERASE, PRTSINK
 ;
 PRTSETUP:
 	CLR	PRTMIR
@@ -743,14 +837,23 @@ PRTCOMMITTIL:
 80$:	MOV	PRTPOS, -2(R5)		; publish: the screen address goes in last
 	RETURN
 ;
-; PRTCOMMITSHADOW -- write one glyph straight into SHADOWPIX/SHADOWATR at
-; (PRTCROW,PRTCOL) and mark the cell dirty, the same convention DRAWBLOCK
-; uses for room scenery.  R1 -> the glyph's 8. font bytes.  Utilizes R1-R4;
-; R0 is the shared loop's string pointer -- saved/restored around the
-; MARKDIRTY call, which wants it as an argument register.
+; PRTCOMMITSHADOW -- write one glyph straight into SHADOWPIX at (PRTCROW,
+; PRTCOL), colour via DIRTYCELLS rather than SHADOWATR.  R1 -> the glyph's
+; 8. font bytes.  Utilizes R0-R4.
+;
+; Deliberately NOT the DRAWBLOCK/room-scenery convention (real SHADOWATR):
+; SHADOWATR is also what CANMOVE's collision probes read as "is this cell a
+; wall" (any non-zero attribute blocks a step) -- an icon writing there
+; would make itself an obstacle Robin could never walk onto, contradicting
+; the whole point of a pickup.  Sprites already have the answer: DRAWCELL's
+; own $00-shadow-attr fallback reads DIRTYCELLS as the cell's colour
+; whenever SHADOWATR is 0, so writing colour there (like DRAWSPRITE's own
+; ramp stamp does) gets a correctly-coloured, collision-transparent icon
+; for free -- one MOVB below serves as both "needs a flush" and "colour",
+; the same dual role DIRTYCELLS already has, so MARKDIRTY is not called
+; here (it would stomp that colour byte down to a bare 1).
 ;
 PRTCOMMITSHADOW:
-	MOV	R0, -(SP)
 	MOV	PRTCROW, R4
 	SWAB	R4
 	BIC	#377, R4		; row * 400 (256.); SWAB also pulls in the
@@ -779,12 +882,46 @@ PRTCOMMITSHADOW:
 80$:	MOV	PRTCROW, R4
 	ASH	#5., R4			; row * 40 (32.), matching MARKDIRTY's indexing
 	ADD	PRTCOL, R4
-	ADD	#SHADOWATR, R4
-	MOVB	R1, (R4)
-	MOV	PRTCOL, R0		; MARKDIRTY: R0 = column, R1 = row
+	ADD	#DIRTYCELLS, R4
+	MOVB	R1, (R4)		; colour + dirty flag in one write (see above)
+	RETURN
+;
+; PRTCOMMITERASE -- XOR one glyph's pixels back off at (PRTCROW,PRTCOL),
+; the exact inverse of PRTCOMMITSHADOW's own draw, via the same SPRXOR
+; helper DRAWSPRITE uses (R0 = byte to XOR, R3 = address; preserves R4).
+; Never touches DIRTYCELLS/attribute -- only MARKDIRTY, so the flush that
+; picks this cell up leaves whatever colour was already there (typically 0
+; by now anyway: DRAWCELL clears DIRTYCELLS after every flush, and an icon
+; is only ever flushed once, at room entry).  R1 -> the glyph's 8. font
+; bytes.  Utilizes R0-R4.
+;
+PRTCOMMITERASE:
+	MOV	PRTCROW, R4
+	SWAB	R4
+	BIC	#377, R4		; row * 400 (256.)
+	ADD	PRTCOL, R4
+	ADD	#SHADOWPIX, R4		; -> this cell's pixel base
+	MOV	#8., R2
+60$:	CLR	R5			; a font byte, kept in R5 -- R0 is the shared
+	BISB	(R1)+, R5		; loop's string pointer, must survive this
+	TST	PRTMIR
+	BEQ	65$
+	MOVB	LFD00(R5), R5		; mirrored => bit-reverse it back
+65$:	MOV	R0, -(SP)		; SPRXOR wants the byte in R0 -- save the
+	MOV	R1, -(SP)		; string pointer, and the font pointer
+	MOV	R5, R0			; (SPRXOR also clobbers R1), around it
+	MOV	R4, R3
+	CALL	SPRXOR			; XORs R0's low byte into (R3)
+	MOV	(SP)+, R1
+	MOV	(SP)+, R0
+	ADD	#PLAYW, R4		; next pixel line
+	SOB	R2, 60$
+;
+	MOV	R0, -(SP)		; MARKDIRTY wants R0/R1 -- save the string
+	MOV	PRTCOL, R0		; pointer first
 	MOV	PRTCROW, R1
 	CALL	MARKDIRTY
-	MOV	(SP)+, R0		; restore the string pointer
+	MOV	(SP)+, R0
 	RETURN
 PRTDONE:
 90$:	RETURN
@@ -1554,6 +1691,7 @@ GAMELOOP:
 	;BEQ	20$			; advance Robin on every other frame only
 	CALL	MOVEROBIN
 	CALL	ROOMEDGE		; hand off to the next room at the L/R edge
+	CALL	OBJPICKUP		; erase any pickup Robin is standing on
 20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;
