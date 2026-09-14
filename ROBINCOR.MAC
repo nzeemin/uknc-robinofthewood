@@ -549,18 +549,24 @@ ENTERROOM:
 ; Placement/collection/carrying ($D4AD/$D7F3/$D595/the Ent) are not ported;
 ; the icon is drawn every room entry and never goes away.
 
-OBJLOGN	= 4				; live-table slots (this port's own size)
+OBJLOGN	= 5				; live-table slots (this port's own size)
 
-OBJLOG:					; room, char column, char row, -> icon string
-	.WORD	115, 20., 10., LB548+1	; test: a flower, room 115 octal (GAMEMAIN's
-					; fixed test room -- match its own radix).
-					; LB548 (ROBININD.MAC), already ported
-					; verbatim -- +1 skips its leading pad
-					; byte (every icon string there starts
-					; with one, not part of the glyph stream)
+; room, char column, char row, -> icon string, type (ZX's own $D9F6 values:
+; 1=wreath, 2=gold, 5=flower, 6=key, 7=quiver -- inlined here rather than
+; named, matching how this port already inlines ZX frame/message numbers
+; elsewhere).  All 5 test entries in the fixed test room (GAMEMAIN's 115
+; octal), one per pick-able type; icon data is ROBININD.MAC's verbatim ZX
+; strings, +1/+2 skipping each one's own leading pad byte or position
+; header as established earlier this session.
+OBJLOG:
+	.WORD	115, 6.,  10., LB536+1, 1	; wreath
+	.WORD	115, 10., 10., LB512+1, 2	; gold
+	.WORD	115, 20., 10., LB548+1, 5	; flower
+	.WORD	115, 24., 10., LB52E, 6	; key (no header to skip)
+	.WORD	115, 8., 12.,  LB57C+1, 7	; quiver (laying/world variant)
 
-; Scan OBJLOG for CURROOM; PRINTGAME the first match's icon and stop (only
-; one icon per room is expected at this table size).  Utilizes R0-R5.
+; Scan OBJLOG for CURROOM; PRINTGAME every match's icon (a room can now
+; hold more than one live pickup).  Utilizes R0-R5.
 OBJSHOW:
 	MOV	#OBJLOG, R4
 	MOV	#OBJLOGN, R3
@@ -570,9 +576,12 @@ OBJSHOW:
 	MOV	2(R4), R1		; character column
 	MOV	4(R4), R2		; character row
 	MOV	6(R4), R0		; -> the icon string
+	MOV	R4, -(SP)		; PRINTGAME clobbers R0-R5 -- save the scan
+	MOV	R3, -(SP)		; pointer and the loop counter across it
 	CALL	PRINTGAME
-	RETURN
-20$:	ADD	#10, R4			; next entry, 4 words = 10 octal bytes
+	MOV	(SP)+, R3
+	MOV	(SP)+, R4
+20$:	ADD	#12, R4			; next entry, 5 words = 12 octal bytes
 	SOB	R3, 10$
 	RETURN
 
@@ -637,18 +646,176 @@ OBJPICKUP:
 	CMP	RPPY, R2
 	BGE	20$
 ;
-; match -- disable the entry, then XOR its icon's pixels back off via
-; PRINTERASE (same string/column/row PRINTGAME drew it with).
-	MOV	2(R4), R1		; character column
-	MOV	4(R4), R2		; character row
-	MOV	6(R4), R0		; -> the icon string
-	MOV	R4, -(SP)		; PRINTERASE clobbers R4 -- save the entry
-	CALL	PRINTERASE		; pointer across the call
-	MOV	(SP)+, R4
-	MOV	#-1, (R4)		; disable this entry -- OBJSHOW won't redraw
-	RETURN				; it, this routine won't retest it
-20$:	ADD	#10, R4
+	JMP	OBJMATCH		; too far for a branch now the dispatch
+					; block sits well past 20$/SOB below
+20$:	ADD	#12, R4			; next entry, 5 words = 12 octal bytes
 	SOB	R3, 10$
+	RETURN
+;
+; match -- capture the entry's fields and disable it immediately (before
+; PRINTERASE/the type dispatch below clobber R4), then erase the world
+; icon and apply this type's own HUD effect.
+OBJMATCH:
+	MOV	2(R4), PKCOL
+	MOV	4(R4), PKROW
+	MOV	6(R4), PKICON
+	MOV	10(R4), PKTYPE
+	MOV	#-1, (R4)		; disable this entry -- OBJSHOW won't redraw
+					; it, this routine won't retest it
+;
+	MOV	PKICON, R0
+	MOV	PKCOL, R1
+	MOV	PKROW, R2
+	CALL	PRINTERASE		; XOR the world icon's pixels back off
+;
+	MOV	PKTYPE, R2
+	CMP	R2, #2			; gold
+	BNE	30$
+	MOV	#2, R0
+	CALL	CARRYPUSH
+	RETURN
+30$:	CMP	R2, #5			; flower
+	BNE	40$
+	MOV	#5, R0
+	CALL	CARRYPUSH
+	RETURN
+40$:	CMP	R2, #7			; quiver
+	BNE	50$
+	CALL	QUIVPICKUP
+	RETURN
+50$:	CMP	R2, #6			; key
+	BNE	60$
+	CALL	KEYPICKUP
+	RETURN
+60$:	CMP	R2, #1			; wreath
+	BNE	90$
+	CALL	WREATHPICKUP
+90$:	RETURN
+
+PKCOL:	.WORD	0			; this pickup's fields, captured before
+PKROW:	.WORD	0			; PRINTERASE/the dispatch clobber R4
+PKICON:	.WORD	0
+PKTYPE:	.WORD	0
+
+;------------------------------------------------------------------------------
+; What picking each type up does, beyond erasing its world icon (handled
+; above already).  Ported from this session's disasm study of $D94B/$DB98/
+; $D91A/$D8FE (docs/Objects.md) -- see the plan for exactly which parts are
+; faithful ports vs. this port's own additions (quiver/key's dedicated HUD
+; slots: ZX's own $D8FE routes quiver into the carry queue and key into an
+; unrelated pre-existing flag, neither with a persistent icon; the wreath
+; life-counter path is a faithful port of $D91A).
+
+; One knob for the whole HUD block below: every row position here is
+; written as <HUDROW0 + a small offset from this block's own lowest ZX-
+; decoded row (20.)>, so nudging the whole thing up or down (this port's
+; own display list doesn't line up with the ZX screen's row 0) is a
+; one-line edit instead of hunting down every literal.
+HUDROW0 = 21.
+
+; Carried-items queue, ZX $D595 -- gold/flower only in this port (quiver
+; goes to its own slot below, not the queue, a deliberate deviation).
+CARRYQ:	.BLKB	8.			; one byte per slot, 0 = empty
+
+; Blind FIFO push, matching $D94B: shift CARRYQ[0..6] -> [1..7], the
+; incoming value (R0, 2=gold or 5=flower) into the freed front slot.  No
+; cap check -- the oldest carried item silently falls off, same as ZX.
+; Utilizes R0, R1, R3, R4.
+CARRYPUSH:
+	MOV	R0, -(SP)		; save the incoming value across the shift
+	MOV	#<CARRYQ+7.>, R4	; walk from the back
+	MOV	#7., R3
+10$:	MOVB	-1(R4), (R4)
+	DEC	R4
+	SOB	R3, 10$
+	MOV	(SP)+, R0
+	MOVB	R0, CARRYQ
+	CALL	HUDCARRY
+	RETURN
+
+HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
+
+; Redraw all 8 carry slots at fixed HUD positions -- covers both $D94B's
+; "just pushed one" and $DB98's "full refresh" call sites with one shared
+; routine.  Empty (0) slots are left blank; own HUD coordinates, not a
+; port of $D9F9's exact pixel packing.  Utilizes R0-R5.
+HUDCARRY:
+	MOV	#CARRYQ, R4
+	CLR	HCSLOT
+10$:	CLR	R0
+	BISB	(R4)+, R0		; this slot's value
+	CMP	R0, #2
+	BNE	20$
+	MOV	#LB512+1, R0		; gold icon
+	BR	40$
+20$:	CMP	R0, #5
+	BNE	50$
+	MOV	#LB548+1, R0		; flower icon
+40$:	MOV	HCSLOT, R1		; ZX $D9F9's own 4x2 grid (decoded from its
+	BIC	#^C3, R1		; raw position bytes): column 12./14./16./18.
+	ASL	R1			; for slot mod 4, row HUDROW0 for slot < 4,
+	ADD	#12., R1		; HUDROW0+2. for slot >= 4
+	MOV	#HUDROW0, R2
+	CMP	HCSLOT, #4.
+	BLT	45$
+	MOV	#<HUDROW0+2.>, R2
+45$:	MOV	R4, -(SP)		; PRINTAT clobbers R4 -- save the queue
+	CALL	PRINTAT			; pointer across the call
+	MOV	(SP)+, R4
+50$:	INC	HCSLOT
+	CMP	HCSLOT, #8.
+	BLT	10$
+	RETURN
+
+; Quiver -- this port's own dedicated always-shown HUD slot (see header
+; note above; ZX's own $D8FE would route this into the carry queue
+; instead).  Drawn once, on pickup.  Utilizes R0-R5.
+QUIVFLAG:	.WORD	0
+QUIVPICKUP:
+	MOV	#1, QUIVFLAG
+	MOV	#LB567+2, R0		; upright/HUD quiver variant, its own 2-byte
+	MOV	#5., R1			; position header ($14,$A8) decodes to
+	MOV	#<HUDROW0+1.>, R2	; column 5., row 21.
+	CALL	PRINTAT
+	RETURN
+
+; Key -- this port's own dedicated always-shown HUD slot (see header note
+; above; ZX's own $D8FE only flips the unrelated $D59F re-seed flag here,
+; no icon).  Drawn once, on pickup.  Utilizes R0-R5.
+KEYFLAG:	.WORD	0
+KEYPICKUP:
+	MOV	#1, KEYFLAG
+	MOV	#LB52E+1, R0		; ZX $B52D/$B52E's own 2-byte position header
+	MOV	#8., R1			; ($20,$A0 -- LB52D's single byte plus
+	MOV	#HUDROW0, R2		; LB52E's first) decodes to column 8., row 20.
+	CALL	PRINTAT
+	RETURN
+
+; Wreath -- faithful port of $D91A: capped (max 9.) life counter, archer
+; icon drawn once per pickup, count redrawn as a single ASCII digit next
+; to it.  $D91A's own second *text* message ($DA09) is not ported --
+; out of scope, the icon+count is the core signal.  Utilizes R0-R5.
+LIVES:		.WORD	0		; capped at 9., matching ZX's $D5A4
+LIVEBUF:	.BYTE	060, 0, 6, 0	; one-glyph PRINTAT string: digit
+					; (patched each call), terminator,
+					; attribute (6 = yellow, matching the
+					; ZX original), terminator
+WREATHPICKUP:
+	CMP	LIVES, #9.
+	BGE	5$
+	INC	LIVES
+5$:	MOV	#LB51F+2, R0		; archer icon, its own 2-byte position header
+	MOV	#7., R1			; skipped.  ZX $B51F's own position bytes
+	MOV	#<HUDROW0+2.>, R2	; ($1C,$B0) decode to column 7., row 22.
+	CALL	PRINTAT
+;
+	MOV	LIVES, R0
+	CALL	HEXDIG			; R0 := ASCII digit (LIVES fits one nibble)
+	MOVB	R0, LIVEBUF
+	MOV	#LIVEBUF, R0		; ZX $DA09's own position bytes ($24,$B8)
+	MOV	#9., R1			; decode to column 9., row 23. -- one row
+	MOV	#<HUDROW0+3.>, R2	; below the archer, not aligned with it
+	CALL	PRINTAT
 	RETURN
 
 ;------------------------------------------------------------------------------
@@ -1528,7 +1695,9 @@ GUARDINIT:
 	ADD	#3, R4
 	CALL	GPRESENT
 	MOV	R0, R5
-	MOV	#<OBJTAB+2*OBJSZ>, R4
+	MOV	#<OBJTAB+<2*OBJSZ>>, R4	; macro11 has no operator precedence --
+					; the inner <> is required, else this
+					; parses as (OBJTAB+2)*OBJSZ
 	CALL	GSPCLR
 	CMP	R5, #3
 	BHIS	21$
@@ -1551,7 +1720,7 @@ GUARDINIT:
 	ADD	#6, R4
 	CALL	GPRESENT
 	MOV	R0, R5
-	MOV	#<OBJTAB+3*OBJSZ>, R4
+	MOV	#<OBJTAB+<3*OBJSZ>>, R4
 	CALL	GSPCLR
 	CMP	R5, #3
 	BHIS	22$
@@ -1574,7 +1743,7 @@ GUARDINIT:
 	ADD	#11, R4
 	CALL	GPRESENT
 	MOV	R0, R5
-	MOV	#<OBJTAB+4*OBJSZ>, R4
+	MOV	#<OBJTAB+<4*OBJSZ>>, R4
 	CALL	GSPCLR
 	CMP	R5, #3
 	BHIS	23$
@@ -1652,6 +1821,14 @@ GAMEMAIN:
 	CALL	CPUVSY			; start the vsync frame counter
 	CALL	RNGINIT			; reseed the PRNG from the live frame counter
 	CALL	GSEEDINIT		; fill the guard seed table (ZX $CE0A)
+;
+	MOV	#CARRYQ, R4		; new game: empty the carry queue and every
+	MOV	#8., R0			; pickup flag/counter (ZX $D3DE's own zero-fill
+5$:	CLRB	(R4)+			; of $D595, extended to this port's own state)
+	SOB	R0, 5$
+	CLR	QUIVFLAG
+	CLR	KEYFLAG
+	CLR	LIVES
 ;
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
