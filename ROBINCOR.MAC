@@ -222,9 +222,7 @@ MIRRORBLOCK:
 	MOV	R0, R5			; row counter
 	MOV	MIRHDR, R0
 	BIC	#^C37, R0		; pixel bytes = <header AND 037> * 32.
-	.REPT	5
-	ASL	R0
-	.ENDR
+	ASH	#5., R0
 	MOV	R2, R3
 	INC	R3
 	ADD	R0, R3			; -> the first attribute row
@@ -306,9 +304,8 @@ DRAWBLOCK:
 ; pixel rows: 4 bytes each, one character row apart
 ;
 	MOV	BLKROW, R3
-	.REPT	8.
-	ASL	R3			; row * 256. -- one character row of pixels
-	.ENDR
+	SWAB	R3			; row * 256. -- one character row of pixels
+	BIC	#377, R3		; SWAB also pulls in the old high byte; drop it
 	MOV	BLKCOL, R1
 	ASL	R1
 	ASL	R1			; column group * 4 = character column
@@ -335,9 +332,7 @@ DRAWBLOCK:
 ; attribute rows: 4 bytes each, one character row apart
 ;
 20$:	MOV	BLKROW, R3
-	.REPT	5
-	ASL	R3			; row * 32. -- one character row of attributes
-	.ENDR
+	ASH	#5., R3			; row * 32. -- one character row of attributes
 	MOV	BLKCOL, R1
 	ASL	R1
 	ASL	R1
@@ -722,6 +717,12 @@ SPRDR1:		.WORD	0
 SPRDC0:		.WORD	0
 SPRFLAG:	.WORD	0		; frame flag byte -- colour select + repeat bits
 SPRRAMP:	.WORD	0		; -> the chosen start in the L8E1C colour ramp
+SPRDCN:		.WORD	0		; footprint width, in cells, for the 80$ ramp stamp
+;
+GLYROWS:	.WORD	0		; wide-glyph frames: grid rows left, 5. down to 0
+GLYROWSRC:	.WORD	0		; -> the current grid row's 6. glyph-code bytes
+GLYROWADR:	.WORD	0		; shadow address of the current grid row, column 0
+GLYPIXCNT:	.WORD	0		; font-row counter within one glyph cell, 8. down to 0
 
 ;------------------------------------------------------------------------------
 ; Draw sprite frame NUMBER -- the head of $C6D6.  Looks the frame data up in
@@ -752,20 +753,10 @@ DRAWSPRITE:
 	BISB	(R0)+, R3		; byte 0 -- width class in the low nibble
 	BIC	#^C17, R3
 	MOV	R3, SPRW
-	CLR	R3
-	BISB	(R0)+, R3		; byte 1 -- row count
-	MOV	R3, SPRROWS
-	CLR	R3
-	BISB	(R0)+, R3		; byte 2 -- flag byte (colour + repeat bits)
-	MOV	R3, SPRFLAG
-	MOV	R0, SPRSRC		; -> the first pixel row
-; ramp start for the cell-colour stamp: L8E12[(flag << 1) AND 0177]
-	ASL	R3
-	BIC	#^C177, R3
-	ADD	#L8E12, R3
-	MOV	(R3), SPRRAMP
 ;
-; shadow address of the first row: SHADOWPIX + Y*PLAYW + byte column
+; shadow address of the first row: SHADOWPIX + Y*PLAYW + byte column.  Shared
+; by narrow and wide-glyph frames alike -- a glyph cell is exactly one
+; shadow byte (8. pixels) wide, so this needs no extra sub-cell shift there.
 ;
 	CLR	R5
 	MOV	R2, R4			; Y
@@ -783,6 +774,25 @@ DRAWSPRITE:
 	ADD	R4, R5
 	ADD	#SHADOWPIX, R5
 	MOV	R5, SPRADR
+;
+	CMP	SPRW, #6		; wide-glyph class -- no 3-byte header, no
+	BNE	15$			; row-tuple pixel data; a separate draw path
+	JMP	GLYPHDRAW		; (too far for BEQ's branch range)
+15$:
+;
+	CLR	R3
+	BISB	(R0)+, R3		; byte 1 -- row count
+	MOV	R3, SPRROWS
+	CLR	R3
+	BISB	(R0)+, R3		; byte 2 -- flag byte (colour + repeat bits)
+	MOV	R3, SPRFLAG
+	MOV	R0, SPRSRC		; -> the first pixel row
+; ramp start for the cell-colour stamp: L8E12[(flag << 1) AND 0177]
+	ASL	R3
+	BIC	#^C177, R3
+	ADD	#L8E12, R3
+	MOV	(R3), SPRRAMP
+	MOV	#4, SPRDCN		; footprint is 4. cells wide
 ;
 	MOV	R1, R3
 	BIC	#^C3, R3		; X AND 3
@@ -807,8 +817,10 @@ DRAWSPRITE:
 ; plot the rows
 ;
 40$:	TST	SPRROWS
-	BEQ	80$
-	DEC	SPRROWS
+	BNE	41$
+	JMP	RAMPSTAMP		; GLYPHDRAW sits between here and the ramp
+					; stamp now -- out of BEQ's branch range
+41$:	DEC	SPRROWS
 ;
 ; fetch this row's source bytes into SPRB0..SPRB2
 ;
@@ -876,10 +888,117 @@ DRAWSPRITE:
 	ADD	#PLAYW, SPRADR		; next pixel line
 	BR	40$
 ;
-; stamp the cell-colour ramp into DIRTYCELLS over the footprint -- the port of
-; $C790.  SPRDC0 .. SPRDC0+3 across SPRDR0 .. SPRDR1.  The ramp cursor runs
-; continuously; flag bit 7 steps it per cell, bit 6 per row, neither => flat.
+; Wide-glyph frames -- the port of $C585/$C5E4/$C648, minus the attribute
+; blend ($C648 is deliberately not ported; the uniform ramp stamp below
+; substitutes for it, same as for narrow frames, so a glyph frame's own
+; attribute bytes are never read here regardless of which of the two
+; attribute layouts the frame data actually carries).
 ;
+; A 5-row x 6-column grid of glyph codes (0 = blank cell) starts right after
+; the header byte already consumed above (R0).  Each glyph is a whole 8x8
+; shadow cell -- one byte wide per pixel line, same as SPRADR/SPRDC0 above --
+; so cells need no sub-cell shift, just a plain XOR of the 8. font bytes at
+; FONTGBASE + code*8. into 8. consecutive shadow pixel lines.
+;
+; Mirrored frames -- both a cell-order swap (read column 5-i of the row
+; where an unmirrored frame reads column i, substituting for $C682) and a
+; per-glyph LFD00 bit-reverse (same convention narrow frames use for
+; SPRMIR), so the whole 6x5 grid comes out as a true horizontal mirror --
+; ZX's own glyph drawer skips the per-glyph reverse (its mirrored poses
+; reuse the same-orientation glyphs, just rearranged), but that mechanism
+; is explicitly unconfirmed in the disassembly, so this port mirrors for
+; real instead of chasing an uncertain byte-exact match.
+;
+; Anchor correction: the 6x5 grid is drawn 1. cell left and 1. row up from
+; the raw X/Y SPRADR/SPRDC0 above (2. cells left when mirrored) -- centers
+; the wider glyph sprite on the same anchor point narrow frames use,
+; instead of anchoring at its own top-left corner.  Tuned empirically
+; against the sit-frame anchor (ZX $C585's own -3/-4 cell constants don't
+; carry over -- this port's SPRDC0/SPRADR baseline differs from theirs).
+;
+GLYPHDRAW:
+	SUB	#1, SPRDC0
+	SUB	#1, SPRADR
+	TST	SPRMIR
+	BEQ	201$
+	DEC	SPRDC0			; mirrored: one cell further left
+	DEC	SPRADR
+201$:	BIC	#^C37, SPRDC0		; re-wrap onto the 32.-byte shadow line
+	SUB	#<8.*PLAYW>, SPRADR	; and one character row up
+;
+	CLR	R3
+	MOV	R3, SPRFLAG		; glyph frames: flat colour, no ramp step
+	ADD	#L8E12, R3
+	MOV	(R3), SPRRAMP
+	MOV	#6, SPRDCN		; footprint is 6. cells wide
+;
+	MOV	R2, R3
+	ASR	R3
+	ASR	R3
+	ASR	R3			; Y / 8. = first character row
+	DEC	R3			; matches the row-up anchor shift above
+	MOV	R3, SPRDR0
+	ADD	#4, R3			; 5. character rows tall
+	MOV	R3, SPRDR1
+;
+	MOV	#5, GLYROWS
+	MOV	R0, GLYROWSRC		; -> the grid's first row of 6. glyph codes
+	MOV	SPRADR, GLYROWADR
+;
+200$:	TST	GLYROWS
+	BNE	205$
+	JMP	RAMPSTAMP		; done -- shared ramp stamp (out of BEQ range)
+205$:
+	DEC	GLYROWS
+	MOV	#6, R5			; columns left in this row
+	MOV	GLYROWADR, R4		; walking cell address, this row
+210$:	TST	R5
+	BEQ	260$
+	DEC	R5
+	TST	SPRMIR
+	BEQ	220$
+	MOV	R5, R3			; mirrored: column 5-i, i.e. index R5 itself
+	BR	225$
+220$:	MOV	#5, R3
+	SUB	R5, R3			; unmirrored: column i, i.e. index 5-R5
+225$:	MOV	GLYROWSRC, R2
+	ADD	R3, R2
+	CLR	R1
+	BISB	(R2), R1		; the glyph code -- 0 = blank cell
+	BEQ	250$
+	ASL	R1
+	ASL	R1
+	ASL	R1			; code * 8. bytes per glyph
+	ADD	#FONTGBASE, R1
+	MOV	R1, R2			; -> the glyph's 8. font bytes
+	MOV	#8., GLYPIXCNT
+	MOV	R4, R3			; this cell's shadow byte, current pixel row
+230$:	CLR	R0
+	BISB	(R2)+, R0		; next font byte
+	TST	SPRMIR
+	BEQ	232$
+	MOVB	LFD00(R0), R0		; mirrored: bit-reverse this glyph row too
+	BIC	#^C377, R0		; MOVB sign-extends -- keep the low byte only
+232$:	CALL	SPRXOR			; XOR into (R3); clobbers R0, R1
+	ADD	#PLAYW, R3
+	DEC	GLYPIXCNT
+	BNE	230$
+250$:	INC	R4			; next cell, one shadow byte to the right
+	BR	210$
+260$:	ADD	#6, GLYROWSRC		; next grid row's 6. glyph codes
+	MOV	#PLAYW, R3
+	ASL	R3
+	ASL	R3
+	ASL	R3			; * 8. pixel lines per cell
+	ADD	R3, GLYROWADR
+	BR	200$
+;
+; stamp the cell-colour ramp into DIRTYCELLS over the footprint -- the port of
+; $C790.  SPRDC0 .. SPRDC0+SPRDCN-1 across SPRDR0 .. SPRDR1.  The ramp cursor
+; runs continuously; flag bit 7 steps it per cell, bit 6 per row, neither =>
+; flat.  Shared by narrow frames (SPRDCN=4) and wide-glyph frames (=6).
+;
+RAMPSTAMP:
 80$:	MOV	SPRRAMP, R5		; running ramp cursor
 	MOV	SPRDR0, R1
 82$:	CMP	R1, SPRDR1
@@ -891,7 +1010,7 @@ DRAWSPRITE:
 	ASL	R2
 	ASL	R2			; row * 32.
 	ADD	SPRDC0, R2
-	MOV	#4, R3
+	MOV	SPRDCN, R3
 84$:	MOVB	(R5), DIRTYCELLS(R2)	; the cell's colour, from the ramp
 	BIT	#200, SPRFLAG		; bit 7 => step the ramp per cell
 	BEQ	85$
@@ -1200,6 +1319,57 @@ GUARDINIT:
 23$:	RETURN
 
 ;------------------------------------------------------------------------------
+; Debug HUD: print CURROOM as 3 hex digits at the top-right of the play area
+; (straight through PRINTSTR/TILBUF, same as the ornaments -- no shadow-screen
+; or attribute-fallback involvement).  Call whenever CURROOM changes.
+
+DBGCOL	= 32.			; play-area column
+DBGROW	= 26.			; play-area top row
+DBGROOM:
+	.BYTE	<DBGCOL*4>, <DBGROW*8.>	; position header
+	.BYTE	060,060,060, 0	; 3 glyphs (filled below) + 000 terminator
+	.BYTE	004,004,004, 0	; one attribute per glyph + terminator
+
+; R0 := the ASCII hex digit for the low nibble of R0 (0-15).  Utilizes R0.
+HEXDIG:
+	CMP	R0, #9.
+	BLE	10$
+	ADD	#7, R0			; close the '9'..'A' gap
+10$:	ADD	#60, R0			; + '0'
+	RETURN
+
+; Render R0's low 12 bits as 3 ASCII hex chars at R4.  Utilizes R0, R2, R3, R4.
+HEXCONV:
+	MOV	R0, R2			; keep the full value across the 3 digits
+;
+	MOV	R2, R3
+	SWAB	R3			; top byte -> low byte, in one instruction
+	MOV	R3, R0
+	BIC	#^C17, R0		; >> 8 -- most significant digit
+	CALL	HEXDIG
+	MOVB	R0, (R4)+
+;
+	MOV	R2, R0
+	ASH	#-4., R0		; >> 4 -- middle digit
+	BIC	#^C17, R0
+	CALL	HEXDIG
+	MOVB	R0, (R4)+
+;
+	MOV	R2, R0
+	BIC	#^C17, R0		; low digit
+	CALL	HEXDIG
+	MOVB	R0, (R4)+
+	RETURN
+
+DBGSHOWROOM:
+	MOV	CURROOM, R0
+	MOV	#<DBGROOM+2>, R4	; -> the 3 glyph bytes
+	CALL	HEXCONV
+	MOV	#DBGROOM, R0
+	CALL	PRINTSTR
+	RETURN
+
+;------------------------------------------------------------------------------
 ; Game entry point, called from START in ROBIN1.MAC.
 
 GAMEMAIN:
@@ -1211,6 +1381,7 @@ GAMEMAIN:
 	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
 	CALL	ENTERROOM
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
+	CALL	DBGSHOWROOM		; !!DEBUG!! room number, top-right of the play area
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
@@ -1349,9 +1520,7 @@ ATRADDR:
 	ASR	R0
 	ASR	R0			; Y >> 3 = character row
 	MOV	R0, R1
-	.REPT	5
-	ASL	R1
-	.ENDR				; row * 32.
+	ASH	#5., R1			; row * 32.
 	MOV	R2, R0
 	ASR	R0
 	ASR	R0			; X >> 2 = column
@@ -1443,9 +1612,15 @@ RMAXY	= 116.
 
 RDIRS	= PKEYLT+PKEYRT+PKEYUP+PKEYDN
 
+FIREHELD:	.WORD	0		; this frame's fire bit, kept out of the
+					; direction mask below -- see RSSIT
+
 MOVEROBIN:
 	MOV	#ROBIN, R4
 	CALL	READINPUT		; R0 = key mask, opposite pairs cancelled
+	MOV	R0, R2
+	BIC	#^C<PKEYFR>, R2
+	MOV	R2, FIREHELD
 	BIC	#^C<RDIRS>, R0		; direction bits only
 	MOV	R0, -(SP)		; keep for the state machine
 ;
@@ -1458,7 +1633,15 @@ MOVEROBIN:
 	BISB	10.(R4), R3
 	MOV	R3, CMTMPY		; Robin's current Y
 ;
-	BIT	#PKEYLT, R0
+; ZX $C95A ($C9AF-C9B4): skip position stepping entirely once ROBST reaches
+; an action state (6 = stick swing and up) -- holds Robin still until the
+; state machine below drives him back to a movement state.
+;
+	CMPB	ROBST, #6
+	BLO	8$
+	JMP	9$
+;
+8$:	BIT	#PKEYLT, R0
 	BEQ	1$
 	MOV	CMTMPX, R2
 	MOV	CMTMPY, R3
@@ -1497,6 +1680,7 @@ MOVEROBIN:
 	TST	R0
 	BNE	4$
 	ADD	#RSTEPY, CMTMPY
+9$:
 4$:	MOV	CMTMPY, R3		; clamp Y (X is ROOMEDGE's job)
 	CMP	R3, #RMINY
 	BGE	5$
@@ -1526,9 +1710,12 @@ MOVEROBIN:
 ; "Stay" leaves the cursor running so the current list keeps animating.
 
 ROBST:		.BYTE	0		; 0 SIT R  1 SIT L  2 RUN R  3 RUN L  4 RUN U  5 RUN D
+					; 6 STICK R  7 STICK L (own numbering, not ZX's $0A/$0B)
 	.EVEN
 
-RSDISP:	.WORD	RSSIT, RSSIT, RSRUNR, RSRUNL, RSRUNU, RSRUND
+SWINGCNT:	.WORD	0		; stick-swing hold, ZX's $CC7A ($10 on trigger)
+
+RSDISP:	.WORD	RSSIT, RSSIT, RSRUNR, RSRUNL, RSRUNU, RSRUND, RSSTICK, RSSTICK
 
 ROBSTATE:
 	BIC	#^C<RDIRS>, R0
@@ -1539,15 +1726,43 @@ ROBSTATE:
 	JMP	(R1)
 
 ; --- states 0 / 1: sitting ---
-RSSIT:	TST	R0
-	BEQ	RSSTAY			; no key => keep sitting
-	BIT	#PKEYRT, R0
+RSSIT:	TST	FIREHELD		; fire takes precedence over movement,
+	BEQ	10$			; same as the ZX action dispatch's order
+	BIT	#<PKEYUP+PKEYDN>, R0
+	BNE	10$			; up/down held => no swing this tick
+	MOV	#20., SWINGCNT		; ZX's $CC7A = $10 (16.) load
+	BITB	#200, 1(R4)		; current facing decides which list
+	BEQ	11$
+	MOV	#7, R1
+	MOV	#LSTICKL, R2
+	JMP	COMMIT			; (too far for BR's branch range)
+11$:	MOV	#6, R1
+	MOV	#LSTICKR, R2
+	JMP	COMMIT
+10$:	TST	R0
+	BNE	13$
+	JMP	RSSTAY			; no key => keep sitting
+13$:	BIT	#PKEYRT, R0
 	BNE	TORUNR
 	BIT	#PKEYLT, R0
 	BNE	TORUNL
 	BIT	#PKEYDN, R0
 	BNE	TORUND
 	BR	TORUNU			; must be up
+
+; --- states 6 / 7: stick swing ---
+RSSTICK:	DEC	SWINGCNT
+	BLE	12$
+	JMP	RSSTAY			; (too far for BR's branch range)
+12$:	BIT	#PKEYRT, R0
+	BNE	TORUNR
+	BIT	#PKEYLT, R0
+	BNE	TORUNL
+	BIT	#PKEYUP, R0
+	BNE	TORUNU
+	BIT	#PKEYDN, R0
+	BNE	TORUND
+	BR	TOSITF
 
 ; --- state 2: running right ---
 RSRUNR:	TST	R0
@@ -1641,6 +1856,14 @@ LSITR:	.BYTE	013, 014			; sit right: lead-in, then hold 014
 LSITR2:	.BYTE	014, 377, <LSITR2&377>, <LSITR2/400>
 LSITL:	.BYTE	213, 214			; sit left (mirrored)
 LSITL2:	.BYTE	214, 377, <LSITL2&377>, <LSITL2/400>
+
+; Stick-swing (pre-sword fire action), ZX $CCDF/$CCEA: 7-step lead-in, then
+; hold the last frame -- RSSTICK's own SWINGCNT ends the swing, not this
+; list running out (OBJSTEP has no "stop", only loop/hold).
+LSTICKR:	.BYTE	035, 035, 036, 036, 037, 037, 040
+LSTICKR2:	.BYTE	040, 377, <LSTICKR2&377>, <LSTICKR2/400>
+LSTICKL:	.BYTE	235, 235, 236, 236, 237, 237, 240	; mirrored
+LSTICKL2:	.BYTE	240, 377, <LSTICKL2&377>, <LSTICKL2/400>
 
 LRUNR:	.BYTE	014, 013			; run right: 2-frame lead-in...
 LRUNRL:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 010, 011, 377
@@ -1743,6 +1966,7 @@ ROOMEDGE:
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
 	CALL	GUARDINIT		; !!TEMP!! placeholder spawn spots, gated by GPRESENT
+	CALL	DBGSHOWROOM		; !!DEBUG!! room number, top-right of the play area
 ;
 	MOV	#ROBIN, R4
 	BISB	#2, 4(R4)		; we redraw Robin below -- next step must erase it
@@ -1846,6 +2070,7 @@ L79F9:
 ; Data modules
 
 .INCLUDE /ROBINFNT.MAC/
+.INCLUDE /ROBINGFN.MAC/
 .INCLUDE /ROBINRBL.MAC/
 .INCLUDE /ROBINRTP.MAC/
 .INCLUDE /ROBINRMX.MAC/
