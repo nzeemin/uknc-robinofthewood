@@ -4,10 +4,17 @@
 ;------------------------------------------------------------------------------
 
 ; !!DEBUG!! uncomment + set to pin GAMEMAIN's starting room
-;DBGINITROOM = ^X0F
+DBGINITROOM = ^X027
 
-; !!DEBUG!! 1 = show CURROOM as 3 hex digits, top-right of the play area
+; !!DEBUG!! 1 = show CURROOM as 3 hex digits, bottom-right of the HUD
 DBGSHOWROOM = 1
+
+; !!DEBUG!! 1 = fill the carry FIFO with gold bags on game start
+DBGGOLDMAX = 1
+
+; !!DEBUG!! Ent's room -- stand-in for ZX's $D38E random 4-room roll, not
+; yet ported.  Robin must be in this room for a purchase to fire.
+DBGENTROOM = ^X026		; one of OBJLOG's own rooms, for easy testing
 
 ; !!DEBUG!! 1 = band test still runs but OBJMATCH's actual erase/HUD-effect
 ; dispatch is skipped, so pickups can be walked over repeatedly while
@@ -524,6 +531,7 @@ CLRSHADOW:
 ; Utilizes R0-R5.
 
 ENTERROOM:
+	CLR	ENTPAID			; ZX $DFE6 -- one Ent purchase per visit
 	CALL	CLRSHADOW		; $D03F
 	MOV	#LB587, R0		; the left and right screen ornaments ($CDA1)
 	CALL	PRINTSTR
@@ -875,10 +883,18 @@ CARRYPUSH:
 
 HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
 
+; Blank 2x2 icon -- same glyph-stream shape as the gold/flower icons
+; (2 glyphs, CR, 2 glyphs), space glyphs so it paints nothing but still
+; overwrites whatever icon used to be there.  Attribute value is
+; irrelevant with no ink to colour.
+CARRYBLANK:	.BYTE	040,040,001,040,040,000,004,004,377,004,004,000
+
 ; Redraw all 8 carry slots at fixed HUD positions -- covers both $D94B's
 ; "just pushed one" and $DB98's "full refresh" call sites with one shared
-; routine.  Empty (0) slots are left blank; own HUD coordinates, not a
-; port of $D9F9's exact pixel packing.  Utilizes R0-R5.
+; routine.  Empty (0) slots draw CARRYBLANK, not skip -- a slot emptied by
+; CARRYPOP/the FIFO shift must erase its old icon, not just leave it.  Own
+; HUD coordinates, not a port of $D9F9's exact pixel packing.  Utilizes
+; R0-R5.
 HUDCARRY:
 	MOV	#CARRYQ, R4
 	CLR	HCSLOT
@@ -889,8 +905,10 @@ HUDCARRY:
 	MOV	#LB512+1, R0		; gold icon
 	BR	40$
 20$:	CMP	R0, #5
-	BNE	50$
+	BNE	30$
 	MOV	#LB548+1, R0		; flower icon
+	BR	40$
+30$:	MOV	#CARRYBLANK, R0		; empty slot -- erase, don't skip
 40$:	MOV	HCSLOT, R1		; ZX $D9F9's own 4x2 grid (decoded from its
 	BIC	#^C3, R1		; raw position bytes): column 12./14./16./18.
 	ASL	R1			; for slot mod 4, row HUDROW0 for slot < 4,
@@ -915,7 +933,7 @@ QUIVPICKUP:
 	MOV	#1, QUIVFLAG
 	MOV	#LB567+2, R0		; upright/HUD quiver variant, its own 2-byte
 	MOV	#5., R1			; position header ($14,$A8) decodes to
-	MOV	#<HUDROW0+1.>, R2	; column 5., row 21.
+	MOV	#<HUDROW0+2.>, R2	; column 5. -- row bumped one lower
 	CALL	PRINTAT
 	RETURN
 
@@ -957,6 +975,118 @@ WREATHPICKUP:
 	MOV	#<HUDROW0+3.>, R2	; below the archer, not aligned with it
 	CALL	PRINTAT
 	RETURN
+
+;------------------------------------------------------------------------------
+; The Ent, weapon seller -- port of ZX's $DF03.  Bring 3 gold slots to his
+; room (DBGENTROOM, above) and each visit buys the next unowned item:
+; sword, then bow, then one of 3 magic arrows.  Not ported: the ~8M-
+; iteration eye-blink busy-wait ($DFCA -- doesn't fit this port's non-
+; blocking per-frame loop) and the 3 magic arrows' distinct purchase text
+; (never transcribed into this port's data files, only the one LB556
+; icon exists) -- matches this port's established "icon+count is the
+; core signal" simplification, same as the wreath counter's own skipped
+; second message.
+
+SWORDFLAG:	.WORD	0		; ZX $D59D
+BOWFLAG:	.WORD	0		; ZX $D59E
+; Magic arrows bought, 0-3 -- ZX $D5A1.  Also the trigger for a forest gate
+; elsewhere ($C462's hint message, not yet ported) once it reaches 3
+ARROWCOUNT:	.WORD	0
+ENTPAID:	.WORD	0		; ZX $DFE6, cleared on room entry (ENTERROOM)
+ENTBOWCD:	.WORD	0		; ZX $D5A0 -- currently inert, no consumer yet
+ARROWHITS:	.WORD	0		; ZX $D5A5 -- currently inert, no producer yet
+
+; Remove up to 3 gold (2) slots from CARRYQ, shifting the rest down and
+; zero-filling the vacated tail, then redraw the carry row.  Port of
+; $DB82's effect, adapted to CARRYQ's own 0=empty blind-array model
+; rather than $D595's raw semantics.  Utilizes R0-R4.
+CARRYPOP:
+	MOV	#CARRYQ, R3		; read cursor
+	MOV	#CARRYQ, R4		; write cursor
+	CLR	R2			; slots dropped so far
+	MOV	#8., R1
+10$:	CLR	R0
+	BISB	(R3)+, R0
+	CMP	R0, #2
+	BNE	20$
+	CMP	R2, #3.
+	BGE	20$
+	INC	R2			; drop this one -- still need more removed
+	BR	30$
+20$:	MOVB	R0, (R4)+		; keep this slot
+30$:	SOB	R1, 10$
+;
+	MOV	#<CARRYQ+8.>, R1	; zero-fill from the write cursor to the end
+40$:	CMP	R4, R1
+	BGE	50$
+	CLRB	(R4)+
+	BR	40$
+50$:	CALL	HUDCARRY
+	RETURN
+
+; Called once per frame from GAMELOOP.  Utilizes R0-R4.
+ENTCHECK:
+	CMP	CURROOM, #DBGENTROOM	; only in the Ent's room
+	BNE	90$
+	CMP	ARROWCOUNT, #3.		; gates the whole routine once all 3 magic
+					; arrows are bought (matches ZX $DF0E -- this
+					; check runs before sword/bow too, not just
+					; the arrow branch)
+	BEQ	90$
+	TST	ENTPAID			; one purchase per visit
+	BNE	90$
+	CALL	PRNG			; ~1-in-256 throttle, matching ZX's R-roll
+	CMP	R0, #1
+	BNE	90$
+;
+	MOV	#CARRYQ, R4		; count gold (2) slots; need >= 3
+	MOV	#8., R3
+	CLR	R2
+10$:	CLR	R0
+	BISB	(R4)+, R0
+	CMP	R0, #2
+	BNE	20$
+	INC	R2
+20$:	SOB	R3, 10$
+	CMP	R2, #3.
+	BLT	90$
+;
+	CALL	CARRYPOP		; remove 3 gold, redraw the carry row
+	MOV	#1, ENTPAID
+;
+	TST	SWORDFLAG
+	BNE	30$
+	MOV	#1, SWORDFLAG
+	MOV	#LB495, R0		; sword icon/message, own position header
+	CALL	PRINTSTR
+	RETURN
+30$:	TST	BOWFLAG
+	BNE	40$
+	MOV	#1, BOWFLAG
+	ADD	#10., ENTBOWCD		; inert for now, faithful to $DF74
+	MOV	#LB567, R0		; quiver-bought confirmation icon
+	CALL	PRINTSTR
+	MOV	#LB4C1, R0		; bow icon/message
+	CALL	PRINTSTR
+	RETURN
+40$:	MOV	#LB556+1, R0		; magic-arrow icon.  Leading pad byte skipped
+					; like gold/flower/quiver-laying -- LB556 has
+					; no embedded header the way sword/bow do, so
+					; this needs PRINTAT's explicit column/row,
+					; not PRINTSTR.  1 glyph wide x 4 rows tall
+					; (its own 3 CRs).  Each of the 3 arrows gets
+					; its own column (ARROWCOUNT is 0-based here,
+					; before the INC below) so all 3 stay visible
+					; at once, 1 empty column apart -- not one
+					; spot redrawn each purchase.
+	MOV	ARROWCOUNT, R1
+	ADD	#2., R1			; base column -- left HUD edge
+	MOV	#HUDROW0, R2		; rows 21-24
+	CALL	PRINTAT
+	INC	ARROWCOUNT
+	;TODO: ARROWCOUNT==3 -- open the forest gate ($C462's hint message,
+	; not yet ported)
+90$:	RETURN
 
 ;------------------------------------------------------------------------------
 ; Print a message string straight into the TILBUF ring -- the port of the ZX
@@ -1975,6 +2105,20 @@ GAMEMAIN:
 	CLR	QUIVFLAG
 	CLR	KEYFLAG
 	CLR	LIVES
+	CLR	SWORDFLAG
+	CLR	BOWFLAG
+	CLR	ARROWCOUNT
+	CLR	ENTPAID
+	CLR	ENTBOWCD
+	CLR	ARROWHITS
+;
+  .IF NE DBGGOLDMAX
+	MOV	#8., R0			; fill every carry slot with gold, no shift
+	MOV	#CARRYQ, R4		; needed -- they all end up the same value
+1$:	MOVB	#2, (R4)+
+	SOB	R0, 1$
+	CALL	HUDCARRY
+  .ENDC
 ;
 	CALL	PLACEWREATH		; randomise OBJLOG's type words (ZX $D3F3/$D402)
 	CALL	PLACERANDOM
@@ -2027,6 +2171,7 @@ GAMELOOP:
 	CALL	MOVEROBIN
 	CALL	ROOMEDGE		; hand off to the next room at the L/R edge
 	CALL	OBJPICKUP		; erase any pickup Robin is standing on
+	CALL	ENTCHECK		; the Ent's weapon-purchase transaction
 20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;

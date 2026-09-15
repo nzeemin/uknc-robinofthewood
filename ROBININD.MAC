@@ -34,7 +34,11 @@ LB434:	.BYTE	100,040,311,312,313,314,315,316
 	.BYTE	000
 
 ; Sword icon (custom font glyphs), for $D7F3's type-$00 trigger and the Ent's sword sale ($DF03)
-LB495:	.BYTE	130,260,171,172,173,174,174,174
+; Row byte bumped 260->300 (3 char rows down) for this port's own Ent HUD
+; placement -- LB4C1's bow icon is 3 rows tall (rows 21-23 at its own row
+; 250), so the sword (2 rows) needs to start at row 24 to clear it; the
+; only caller is ENTCHECK.
+LB495:	.BYTE	130,300,171,172,173,174,174,174
 	.BYTE	175,001,176,177,200,201,201,201
 	.BYTE	202,000,106,006,006,105,105,105
 	.BYTE	105,377,106,102,006,105,105,105
@@ -47,7 +51,9 @@ LB4B8:	.BYTE	000
 	.BYTE	104,106,106,000
 
 ; Bow icon (custom font glyphs), for $D7F3's type-$03 trigger and the Ent's bow sale ($DF03)
-LB4C1:	.BYTE	130,240,203,204,205,206,205,205
+; Row byte bumped 240->250 (one char row down) for this port's own Ent HUD
+; placement, +8. pixel lines -- the only caller is ENTCHECK.
+LB4C1:	.BYTE	130,250,203,204,205,206,205,205
 	.BYTE	205,002,204,203,003,001,207,210
 	.BYTE	211,212,213,214,002,211,210,207
 	.BYTE	003,001,040,040,040,040,215,216
@@ -81,12 +87,14 @@ LB536:	.BYTE	000,235,236,237,001,240,241,242
 ; Flower icon (custom font glyphs), for event status $05
 LB548:	.BYTE	000,243,244,001,245,246,000,105
 	.BYTE	107,377,104,106,000,000
-	.BYTE	000,306,001,307,001,307,001,310
+
+; Arrow icon (custom font glyphs), message index $04 in $D7CE
+LB556:	.BYTE	000,306,001,307,001,307,001,310
 	.BYTE	000,102,377,104,377,104,377,106
 	.BYTE	000
 
 ; Quiver icon, upright/HUD (custom font glyphs), for the Ent's bow sale ($DF03)
-LB567:	.BYTE	024,250,300,301,001,302,303,001
+LB567:	.BYTE	024,260,300,301,001,302,303,001
 	.BYTE	304,305,000,106,106,377,104,104
 	.BYTE	377,104,104,000,000
 
