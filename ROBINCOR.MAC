@@ -3,6 +3,18 @@
 ; Included into ROBIN1.MAC, so this is one single module; long labels allowed.
 ;------------------------------------------------------------------------------
 
+; !!DEBUG!! uncomment + set to pin GAMEMAIN's starting room
+;DBGINITROOM = ^X0F
+
+; !!DEBUG!! 1 = show CURROOM as 3 hex digits, top-right of the play area
+DBGSHOWROOM = 1
+
+; !!DEBUG!! 1 = band test still runs but OBJMATCH's actual erase/HUD-effect
+; dispatch is skipped, so pickups can be walked over repeatedly while
+; tuning the zone.
+DBGPICKGATE = 0
+
+
 ;------------------------------------------------------------------------------
 ; Flush all dirty cells of the play area to the screen through the TILBUF ring.
 ; Only the 28. inner columns are scanned: columns 0-1 and 30-31 are the fixed
@@ -538,43 +550,88 @@ ENTERROOM:
 	RETURN
 
 ;------------------------------------------------------------------------------
-; Room pickup icons -- the display half of the ZX $D5A7/$D543 pipeline. Not
-; the placement RNG or the room-position runtime log yet: OBJLOG is this
-; port's own small, statically-seeded stand-in for $D543, scanned fresh on
-; every room entry.  Icon data is a PRINTGAME string (no position header) --
-; confirmed this session that $B536/$B548/etc. icon data is exactly that
-; format already, using glyph codes already present in ROBINFNT.MAC (the
-; ZX's $AC33/$AD31 "HUD font" and "message font" are the same table).
+; Room pickup icons -- the display half of the ZX $D5A7/$D543 pipeline.
+; OBJLOG's 30 entries are ZX's own $D4AD authored (room,X,Y) map positions,
+; transcribed verbatim (see the table below); what varies game to game is
+; only each entry's *type* word, randomised at boot by PLACEWREATH/
+; PLACERANDOM (ports of $D3F3/$D402) instead of being baked in here.
 ;
-; Placement/collection/carrying ($D4AD/$D7F3/$D595/the Ent) are not ported;
-; the icon is drawn every room entry and never goes away.
+; This still collapses ZX's real indirection ($D4AD's message drives a
+; room-entry text banner via $D619/$D631 whose "arrow marker" mode arms a
+; trigger in $D57A, which $D7F3/OBJPICKUP then tests, only then reaching
+; $D9F6's type) into one direct (room,X,Y,type) list -- no $D57A trigger-
+; arming/text-banner layer is ported, same simplification this port has
+; used since OBJLOG was first added.
+;
+; X/Y are in the exact same coordinate units as Robin's own ROBIN+6/+7
+; fields -- X in 2-pixel units, Y in real pixels, not character cells --
+; confirmed to need zero conversion from $D4AD's own raw posD/posE bytes.
+; type 0 = empty slot (skipped by OBJSHOW/OBJPICKUP); ZX's own $D9F6
+; values otherwise: 1=wreath, 2=gold, 5=flower, 6=key, 7=quiver.
 
-OBJLOGN	= 2				; live-table slots (this port's own size)
+; The game's 4 possible starting rooms, port of ZX's $D39A (rolled once at
+; game start by $CF71's third roll, picking Robin's actual $C548).
+STARTROOMS:
+	.WORD	210., 257., 283., 156.
 
-; room, X, Y, -> icon string, type (ZX's own $D9F6 values: 1=wreath, 2=gold,
-; 5=flower, 6=key, 7=quiver -- inlined here rather than named, matching how
-; this port already inlines ZX frame/message numbers elsewhere).  X/Y are
-; in the exact same coordinate units as Robin's own ROBIN+6/+7 fields --
-; X in 2-pixel units, Y in real pixels -- not character cells, so OBJPICKUP
-; can compare them against Robin's position with no unit conversion.  All 5
-; test entries in the fixed test room (GAMEMAIN's 115 octal), one per
-; pick-able type; icon data is ROBININD.MAC's verbatim ZX strings, +1/+2
-; skipping each one's own leading pad byte or position header as
-; established earlier this session.
+OBJLOGN	= 30.				; live-table slots, matching $D4AD's own 30
+
+; room, X, Y, type -- room/X/Y from $D4AD verbatim (room is the same packed
+; word CURROOM/$C548 itself uses, confirmed identical encoding); type
+; starts 0 (empty) and is filled in by PLACEWREATH/PLACERANDOM at GAMEMAIN
+; init, never baked in here.
 OBJLOG:
-	.WORD	115, 16.,  80., LB536+1, 1	; wreath
-	;.WORD	115, 40., 80., LB512+1, 2	; gold
-	.WORD	115, 80., 80., LB548+1, 5	; flower
-	;.WORD	115, 96., 80., LB52E, 6	; key (no header to skip)
-	;.WORD	115, 32., 96., LB57C+1, 7	; quiver (laying/world variant)
+	.WORD	219., 80., 88., 0
+	.WORD	3.,  48., 96., 0
+	.WORD	4.,  92., 96., 0
+	.WORD	6.,  92., 96., 0
+	.WORD	14., 8.,  88., 0
+	.WORD	20., 8.,  88., 0
+	.WORD	33., 8.,  88., 0
+	.WORD	35., 92., 96., 0
+	.WORD	37., 92., 96., 0
+	.WORD	46., 88., 88., 0
+	.WORD	63., 80., 88., 0
+	.WORD	81., 80., 88., 0
+	.WORD	126.,24., 96., 0
+	.WORD	128.,92., 96., 0
+	.WORD	159.,40., 96., 0
+	.WORD	165.,72., 96., 0
+	.WORD	174.,72., 96., 0
+	.WORD	177.,92., 96., 0
+	.WORD	182.,92., 96., 0
+	.WORD	185.,72., 96., 0
+	.WORD	202.,48., 96., 0
+	.WORD	218.,80., 88., 0
+	.WORD	223.,92., 88., 0
+	.WORD	233.,44., 96., 0
+	.WORD	242.,80., 88., 0
+	.WORD	245.,72., 96., 0
+	.WORD	248.,24., 88., 0
+	.WORD	252.,72., 96., 0
+	.WORD	274.,80., 88., 0
+	.WORD	286.,80., 88., 0
+
+; type -> icon string address (+1/+2 header-skip baked in, mirrors ZX's
+; own per-type $D7D0 icon pointers for the 5 types this port handles).
+TYPICON:
+	.WORD	0			; 0: unused (empty slot)
+	.WORD	LB536+1			; 1: wreath
+	.WORD	LB512+1			; 2: gold
+	.WORD	0			; 3: unused
+	.WORD	0			; 4: unused
+	.WORD	LB548+1			; 5: flower
+	.WORD	LB52E			; 6: key (no header to skip)
+	.WORD	LB57C+1			; 7: quiver
 
 ; Scan OBJLOG for CURROOM; PRINTGAME every match's icon (a room can now
 ; hold more than one live pickup).  Utilizes R0-R5.
 OBJSHOW:
 	MOV	#OBJLOG, R4
 	MOV	#OBJLOGN, R3
-10$:	MOV	(R4), R0
-	CMP	R0, CURROOM
+10$:	MOV	6(R4), R0
+	BEQ	20$			; type 0 -- empty slot
+	CMP	(R4), CURROOM
 	BNE	20$
 	MOV	2(R4), R1		; X, 2-pixel units -> char column = X/4.
 	ASR	R1
@@ -583,23 +640,93 @@ OBJSHOW:
 	ASR	R2
 	ASR	R2
 	ASR	R2
-	MOV	6(R4), R0		; -> the icon string
+	ASL	R0			; type * 2 = TYPICON word offset
+	MOV	TYPICON(R0), R0		; -> the icon string
 	MOV	R4, -(SP)		; PRINTGAME clobbers R0-R5 -- save the scan
 	MOV	R3, -(SP)		; pointer and the loop counter across it
 	CALL	PRINTGAME
 	MOV	(SP)+, R3
 	MOV	(SP)+, R4
-20$:	ADD	#12, R4			; next entry, 5 words = 12 octal bytes
+20$:	ADD	#10, R4			; next entry, 4 words = 10 octal bytes
 	SOB	R3, 10$
 	RETURN
 
 ;------------------------------------------------------------------------------
-; Pickup collision -- the display-erase half of the ZX $D7F3 pipeline, called
-; once per game frame.  Faithful port of ZX's own pixel-band test (docs/
-; Objects.md, $D7F3):
-;   X = max($CC85, $18) - $18,  must satisfy xref <= X < xref+$10
-;   Y = $CC86 + $0C,            must satisfy yref <= Y < yref+$10
-; i.e. X = max(px,24.)-24. in [xref,xref+16.); Y = py+12. in [yref,yref+16.)
+; Random pickup placement at game start -- ports of ZX's $D47D/$D3F3/$D402.
+; Uses PRNG (this port's LFSR, further down this file) in place of ZX's R-
+; register sampling.
+
+; Find a free (type 0) OBJLOG slot: port of $D47D.  Random start index
+; 0-29 via PRNG, clamped like $D47D's own AND $1F / CP $1E retry, then a
+; linear scan forward from there, wrapping at 30 back to 0, for the first
+; type-0 entry.  Returns R4 -> that entry.  Utilizes R0, R2-R4.
+FINDFREESLOT:
+	CALL	PRNG
+	BIC	#^C37, R0		; mask to 0-31
+1$:	CMP	R0, #30.
+	BLT	2$
+	DEC	R0			; >= 30 -- decrement and retry (matches $D47D)
+	BR	1$
+2$:	MOV	R0, R2			; R2 = the starting index, for wrap detection
+	MOV	#OBJLOG, R4
+	MOV	R0, R3
+	ASL	R3
+	ASL	R3
+	ASL	R3			; * 8. = byte offset (4-word, 10-octal stride)
+	ADD	R3, R4			; R4 -> OBJLOG[R0]
+3$:	TST	6(R4)			; type word: 0 = free
+	BEQ	9$
+	ADD	#10, R4			; next entry, wrapping at 30 back to OBJLOG
+	INC	R0
+	CMP	R0, #30.
+	BLT	4$
+	CLR	R0
+	MOV	#OBJLOG, R4
+4$:	CMP	R0, R2			; wrapped all the way back? (shouldn't happen --
+	BNE	3$			; 30 slots, at most 6+9+11 = 26. ever placed)
+9$:	RETURN
+
+; Force 6 guaranteed wreaths: port of $D3F3.  Slot 0 is always one (matches
+; $D4B1's own forced slot-0 wreath); 5 more via FINDFREESLOT.  Utilizes
+; R0, R2-R4.
+PLACEWREATH:
+	MOV	#1, OBJLOG+6		; slot 0's type word
+	MOV	#5., R5
+1$:	CALL	FINDFREESLOT
+	MOV	#1, 6(R4)
+	SOB	R5, 1$
+	RETURN
+
+; Random flower/quiver counts into free slots: port of $D402.  Utilizes
+; R0, R2-R5.
+PLACERANDOM:
+	CALL	PRNG			; flowers: 6-9, matching $D40A-$D41A's
+	BIC	#^C3, R0		; two-roll sum
+	MOV	R0, R5
+	CALL	PRNG
+	BIC	#^C1, R0
+	ADD	R0, R5
+	ADD	#6., R5
+1$:	CALL	FINDFREESLOT
+	MOV	#5, 6(R4)
+	SOB	R5, 1$
+;
+	CALL	PRNG			; quivers: 8-11, matching $D42F-$D43F
+	BIC	#^C3, R0
+	MOV	R0, R5
+	CALL	PRNG
+	BIC	#^C1, R0
+	ADD	R0, R5
+	ADD	#8., R5
+2$:	CALL	FINDFREESLOT
+	MOV	#7, 6(R4)
+	SOB	R5, 2$
+	RETURN
+
+;------------------------------------------------------------------------------
+; Pickup collision, called once per game frame.  Based on the ZX's own
+; $D7F3 pixel-band test, tuned live against the actual UKNC screen:
+;   X = max(px,4.)-4. in [xref,xref+24.); Y = py+12. in [yref,yref+24.)
 ; -- two independent pixel-precise ranges against the icon's own printed
 ; position, not a cell-snapped or sprite-hitbox test.  px = 2*field6 (Robin's
 ; field 6 is 2-pixel units -- X=64. spawn confirmed live as ZX's screen-
@@ -609,15 +736,10 @@ OBJSHOW:
 ; character cells, so xref = OBJLOG.X * 2. and yref = OBJLOG.Y with no
 ; further conversion.
 ;
-; Utilizes R0-R5.
+; Utilizes R0-R4.
 
 RPPX:	.WORD	0			; Robin's real pixel X, this test
 RPPY:	.WORD	0			; Robin's real pixel Y, this test
-
-; !!DEBUG!! 1 = band test still runs and the HUD indicator (DBGSHOWPICK)
-; still shows the hit, but OBJMATCH's actual erase/HUD-effect dispatch is
-; skipped, so pickups can be walked over repeatedly while tuning the zone.
-DBGPICKGATE = 0
 
 OBJPICKUP:
 	MOV	#ROBIN, R4
@@ -634,13 +756,11 @@ OBJPICKUP:
 	ADD	#12., R0		; Y = py + 12.
 	MOV	R0, RPPY
 ;
-	CLR	R5			; in-band flag, for DBGSHOWPICK below
 	MOV	#OBJLOG, R4
 	MOV	#OBJLOGN, R3
-10$:	MOV	(R4), R0
-	CMP	R0, #-1
-	BEQ	20$			; unused slot
-	CMP	R0, CURROOM
+10$:	TST	6(R4)
+	BEQ	20$			; type 0 -- empty slot
+	CMP	(R4), CURROOM
 	BNE	20$
 ; X band: xref <= RPPX < xref+16., xref = OBJLOG.X * 2. (2-pixel units -> real)
 	MOV	2(R4), R1
@@ -658,16 +778,13 @@ OBJPICKUP:
 	CMP	RPPY, R2
 	BGE	20$
 ;
-	MOV	#1, R5
-	.IF NE DBGPICKGATE
+  .IF NE DBGPICKGATE
 	BR	20$			; gated: count as a hit but leave the entry live
-	.ENDC
-	JMP	OBJMATCH		; too far for a branch now the dispatch
+  .ENDC
+	BR	OBJMATCH		; too far for a branch now the dispatch
 					; block sits well past 20$/SOB below
-20$:	ADD	#12, R4			; next entry, 5 words = 12 octal bytes
+20$:	ADD	#10, R4			; next entry, 4 words = 10 octal bytes
 	SOB	R3, 10$
-	MOV	R5, R0
-	CALL	DBGSHOWPICK
 	RETURN
 ;
 ; match -- capture the entry's fields and disable it immediately (before
@@ -676,12 +793,13 @@ OBJPICKUP:
 OBJMATCH:
 	MOV	2(R4), PKCOL
 	MOV	4(R4), PKROW
-	MOV	6(R4), PKICON
-	MOV	10(R4), PKTYPE
-	MOV	#-1, (R4)		; disable this entry -- OBJSHOW won't redraw
+	MOV	6(R4), PKTYPE
+	CLR	6(R4)			; disable this entry -- OBJSHOW won't redraw
 					; it, this routine won't retest it
 ;
-	MOV	PKICON, R0
+	MOV	PKTYPE, R0
+	ASL	R0			; type * 2 = TYPICON word offset
+	MOV	TYPICON(R0), R0		; -> the icon string
 	MOV	PKCOL, R1		; X, 2-pixel units -> char column = X/4.
 	ASR	R1
 	ASR	R1
@@ -717,7 +835,6 @@ OBJMATCH:
 
 PKCOL:	.WORD	0			; this pickup's fields, captured before
 PKROW:	.WORD	0			; PRINTERASE/the dispatch clobber R4
-PKICON:	.WORD	0
 PKTYPE:	.WORD	0
 
 ;------------------------------------------------------------------------------
@@ -1789,13 +1906,17 @@ GUARDINIT:
 ; Debug HUD: print CURROOM as 3 hex digits at the top-right of the play area
 ; (straight through PRINTSTR/TILBUF, same as the ornaments -- no shadow-screen
 ; or attribute-fallback involvement).  Call whenever CURROOM changes.
+; Gated by DBGSHOWROOM above; HEXDIG below stays ungated -- WREATHPICKUP
+; also uses it for the life-count digit.
 
+  .IF NE DBGSHOWROOM
 DBGCOL	= 32.			; play-area column
 DBGROW	= 26.			; play-area top row
 DBGROOM:
 	.BYTE	<DBGCOL*4>, <DBGROW*8.>	; position header
 	.BYTE	060,060,060, 0	; 3 glyphs (filled below) + 000 terminator
 	.BYTE	004,004,004, 0	; one attribute per glyph + terminator
+  .ENDC
 
 ; R0 := the ASCII hex digit for the low nibble of R0 (0-15).  Utilizes R0.
 HEXDIG:
@@ -1805,6 +1926,7 @@ HEXDIG:
 10$:	ADD	#60, R0			; + '0'
 	RETURN
 
+  .IF NE DBGSHOWROOM
 ; Render R0's low 12 bits as 3 ASCII hex chars at R4.  Utilizes R0, R2, R3, R4.
 HEXCONV:
 	MOV	R0, R2			; keep the full value across the 3 digits
@@ -1828,30 +1950,14 @@ HEXCONV:
 	MOVB	R0, (R4)+
 	RETURN
 
-DBGSHOWROOM:
+DBGROOMDRAW:
 	MOV	CURROOM, R0
 	MOV	#<DBGROOM+2>, R4	; -> the 3 glyph bytes
 	CALL	HEXCONV
 	MOV	#DBGROOM, R0
 	CALL	PRINTSTR
 	RETURN
-
-; Debug HUD: single '0'/'1' glyph, left of DBGROOM, showing whether Robin is
-; in a pickup band this frame (OBJPICKUP.R5).  R0 = 0 or 1.  Call every
-; frame -- cheap, one glyph through PRINTSTR.  Utilizes R0, R4.
-DBGPICKCOL = 28.			; play-area column, left of DBGROOM
-DBGPICK:
-	.BYTE	<DBGPICKCOL*4>, <DBGROW*8.>	; position header
-	.BYTE	060, 0			; 1 glyph (filled below) + 000 terminator
-	.BYTE	004, 0			; one attribute + terminator
-
-DBGSHOWPICK:
-	ADD	#60, R0			; 0/1 -> ASCII '0'/'1'
-	MOV	#<DBGPICK+2>, R4
-	MOVB	R0, (R4)
-	MOV	#DBGPICK, R0
-	CALL	PRINTSTR
-	RETURN
+  .ENDC
 
 ;------------------------------------------------------------------------------
 ; Game entry point, called from START in ROBIN1.MAC.
@@ -1870,10 +1976,22 @@ GAMEMAIN:
 	CLR	KEYFLAG
 	CLR	LIVES
 ;
-	MOV	#115, CURROOM		; !!TEMP!! fixed room until a menu / new game picks one
+	CALL	PLACEWREATH		; randomise OBJLOG's type words (ZX $D3F3/$D402)
+	CALL	PLACERANDOM
+;
+  .IF DF DBGINITROOM		; !!DEBUG!! define DBGINITROOM = <room> above to
+	MOV	#DBGINITROOM, CURROOM	; force a specific starting room; undefined
+  .IFF				; (the default) picks randomly, as below
+	CALL	PRNG			; pick Robin's starting room: port of $CF71's
+	BIC	#^C3, R0		; third roll (the $D39A table) -- one of 4
+	ASL	R0			; * 2. = word offset
+	MOV	STARTROOMS(R0), CURROOM
+  .ENDC
 	CALL	ENTERROOM
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
-	CALL	DBGSHOWROOM		; !!DEBUG!! room number, top-right of the play area
+  .IF NE DBGSHOWROOM
+	CALL	DBGROOMDRAW		; room number, top-right of the play area
+  .ENDC
 ;
 	;TODO: title picture and menu
 	;TODO: new game init
@@ -2459,7 +2577,9 @@ ROOMEDGE:
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
 	CALL	GUARDINIT		; !!TEMP!! placeholder spawn spots, gated by GPRESENT
-	CALL	DBGSHOWROOM		; !!DEBUG!! room number, top-right of the play area
+  .IF NE DBGSHOWROOM
+	CALL	DBGROOMDRAW		; room number, top-right of the play area
+  .ENDC
 ;
 	MOV	#ROBIN, R4
 	BISB	#2, 4(R4)		; we redraw Robin below -- next step must erase it
