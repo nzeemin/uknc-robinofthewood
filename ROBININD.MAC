@@ -88,6 +88,14 @@ LB536:	.BYTE	000,235,236,237,001,240,241,242
 LB548:	.BYTE	000,243,244,001,245,246,000,105
 	.BYTE	107,377,104,106,000,000
 
+; Blank 2x2 icon -- this port's own addition, not a ZX label.  Same glyph-
+; stream shape as the gold/flower icons above (2 glyphs, CR, 2 glyphs),
+; space glyphs so it paints nothing but still overwrites whatever icon
+; used to be there.  Used by HUDCARRY (ROBINCOR.MAC) to erase an emptied
+; carry slot instead of leaving its old icon on screen.  Attribute value
+; is irrelevant with no ink to colour.
+CARRYBLANK:	.BYTE	040,040,001,040,040,000,004,004,377,004,004,000
+
 ; Arrow icon (custom font glyphs), message index $04 in $D7CE
 LB556:	.BYTE	000,306,001,307,001,307,001,310
 	.BYTE	000,102,377,104,377,104,377,106

@@ -16,11 +16,18 @@ DBGGOLDMAX = 1
 ; yet ported.  Robin must be in this room for a purchase to fire.
 DBGENTROOM = ^X026		; one of OBJLOG's own rooms, for easy testing
 
+; !!DEBUG!! Hermit's room -- stand-in for ZX's $D392 random 3-room roll,
+; not yet ported.  Decoration only; no Hermit interaction exists yet.
+DBGHERMITROOM = ^X0F0		; placeholder, pick any room distinct from
+				; DBGENTROOM and the OBJLOG/start rooms
+
 ; !!DEBUG!! 1 = band test still runs but OBJMATCH's actual erase/HUD-effect
 ; dispatch is skipped, so pickups can be walked over repeatedly while
 ; tuning the zone.
 DBGPICKGATE = 0
 
+; Top row number for the HUD block under the game screen and antlers
+HUDROW0 = 21.
 
 ;------------------------------------------------------------------------------
 ; Flush all dirty cells of the play area to the screen through the TILBUF ring.
@@ -154,6 +161,9 @@ READINPUT:
 
 CURROOM:	.WORD	0	; $C548, packed room number: column in the high
 				; nibble, row in the rest
+TREEROOM:	.WORD	0	; $D3B6, Robin's start room -- not independently
+				; rolled, just CURROOM's value right after
+				; GAMEMAIN picks it (see DRAWSCENARIO)
 ROOMIDX:	.WORD	0	; $C547, index into the table DESCTAB points at
 DESCTAB:	.WORD	0	; $C54A, L7B39 or L8511
 ROOMFLAG:	.WORD	0	; $C0E8, bit 7 of the room's world-map byte
@@ -227,8 +237,7 @@ MIRRORBLOCK:
 	DEC	R4
 	CALL	SWAPREVERSED		; the inner pair
 	ADD	#3, R3			; -> the next row
-	DEC	R5
-	BNE	10$
+	SOB	R5, 10$
 ;
 ; attribute rows: swapped end for end, left as they are
 ;
@@ -252,8 +261,7 @@ MIRRORBLOCK:
 	DEC	R4
 	CALL	SWAPPLAIN		; the inner pair
 	ADD	#3, R3			; -> the next row
-	DEC	R5
-	BNE	30$
+	SOB	R5, 30$
 90$:	RETURN
 
 ; Swap the bytes at (R3) and (R4), bit-reversing both.  Utilizes R0, R1.
@@ -324,7 +332,7 @@ DRAWBLOCK:
 ;
 	MOV	BLKROW, R3
 	SWAB	R3			; row * 256. -- one character row of pixels
-	BIC	#377, R3		; SWAB also pulls in the old high byte; drop it
+	CLRB	R3			; SWAB also pulls in the old high byte; drop it
 	MOV	BLKCOL, R1
 	ASL	R1
 	ASL	R1			; column group * 4 = character column
@@ -345,8 +353,7 @@ DRAWBLOCK:
 	MOVB	(R2)+, (R4)+
 	.ENDR
 	ADD	#PLAYW, R3		; down one pixel row
-	DEC	R5
-	BNE	10$
+	SOB	R5, 10$
 ;
 ; attribute rows: 4 bytes each, one character row apart
 ;
@@ -374,8 +381,7 @@ DRAWBLOCK:
 	ADD	R4, R2
 	.ENDR
 	ADD	#PLAYW, R3		; down one character row
-	DEC	R5
-	BNE	30$
+	SOB	R5, 30$
 90$:	RETURN
 
 ;------------------------------------------------------------------------------
@@ -422,9 +428,50 @@ DRAWTOKENSAT:
 	MOV	(SP)+, R3		; the token pointer again
 	ADD	#2, R3			; -> the next token
 	MOV	(SP)+, R0		; the counter again
-	DEC	R0
-	BNE	10$
+	SOB	R0, 10$
 90$:	RETURN
+
+; Ent's room decoration, port of ZX $C56A -- a 2x2 arrangement of blocks
+; $1C-$1F, the Ent's tree figure.
+SCENENT:	.BYTE	4
+		.BYTE	012, 034	; $0A,$1C
+		.BYTE	013, 035	; $0B,$1D
+		.BYTE	052, 036	; $2A,$1E
+		.BYTE	053, 037	; $2B,$1F
+
+; Hermit's hut decoration, port of ZX $C573 -- same layout, blocks $24-$27.
+SCENHERMIT:	.BYTE	4
+		.BYTE	012, 044	; $0A,$24
+		.BYTE	013, 045	; $0B,$25
+		.BYTE	052, 046	; $2A,$26
+		.BYTE	053, 047	; $2B,$27
+
+; Robin's start-room "split tree" decoration, port of ZX $C57C -- blocks
+; $20-$23, placed nowhere else on the map.
+SCENTREE:	.BYTE	4
+		.BYTE	013, 040	; $0B,$20
+		.BYTE	014, 041	; $0C,$21
+		.BYTE	053, 042	; $2B,$22
+		.BYTE	054, 043	; $2C,$23
+	.EVEN
+
+; Draws whichever of the Ent/Hermit/start-tree decorations belongs in
+; CURROOM, if any -- port of ZX $C15E, called once per room entry.
+; Utilizes R0-R5 (via DRAWTOKENSAT).
+DRAWSCENARIO:
+	CMP	CURROOM, #DBGENTROOM
+	BNE	10$
+	MOV	#SCENENT, R3
+	BR	DRAWTOKENSAT
+10$:	CMP	CURROOM, #DBGHERMITROOM
+	BNE	20$
+	MOV	#SCENHERMIT, R3
+	BR	DRAWTOKENSAT
+20$:	CMP	CURROOM, TREEROOM
+	BNE	99$
+	MOV	#SCENTREE, R3
+90$:	BR	DRAWTOKENSAT
+99$:	RETURN
 
 ;------------------------------------------------------------------------------
 ; Draw the room CURROOM onto the shadow screen -- the port of the ZX routine
@@ -461,7 +508,7 @@ DRAWROOM:
 	BHIS	90$			; yes => the base room type only
 	MOV	R0, ROOMIDX		; the second pass indexes by room number
 	MOV	#L8511, DESCTAB
-	CALL	DRAWTOKENS
+	BR	DRAWTOKENS
 90$:	RETURN
 
 ;------------------------------------------------------------------------------
@@ -542,7 +589,7 @@ ENTERROOM:
 	MOV	#LD305, R0
 	CALL	PRINTSTR
 	CALL	DRAWROOM		; $C072
-	;TODO: $C15E -- scenario decoration in the 3 random opening rooms
+	CALL	DRAWSCENARIO		; $C15E
 	;TODO: $C444 -- room $BB special recolour
 	CALL	RECOLORCASTLE		; $C40E
 	;TODO: $C462 -- single-column-room hint message
@@ -554,8 +601,7 @@ ENTERROOM:
 					; the whole play area, which would otherwise
 					; stomp the real colour PRTCOMMITSHADOW just
 					; wrote there back down to 1.
-	CALL	DRAWALL			; flush the room first so the ornaments land on top
-	RETURN
+	JMP	DRAWALL			; flush the room first so the ornaments land on top
 
 ;------------------------------------------------------------------------------
 ; Room pickup icons -- the display half of the ZX $D5A7/$D543 pipeline.
@@ -821,24 +867,17 @@ OBJMATCH:
 	CMP	R2, #2			; gold
 	BNE	30$
 	MOV	#2, R0
-	CALL	CARRYPUSH
-	RETURN
+	BR	CARRYPUSH
 30$:	CMP	R2, #5			; flower
 	BNE	40$
 	MOV	#5, R0
-	CALL	CARRYPUSH
-	RETURN
+	BR	CARRYPUSH
 40$:	CMP	R2, #7			; quiver
-	BNE	50$
-	CALL	QUIVPICKUP
-	RETURN
+	BEQ	QUIVPICKUP
 50$:	CMP	R2, #6			; key
-	BNE	60$
-	CALL	KEYPICKUP
-	RETURN
+	BEQ	KEYPICKUP
 60$:	CMP	R2, #1			; wreath
-	BNE	90$
-	CALL	WREATHPICKUP
+	BEQ	WREATHPICKUP
 90$:	RETURN
 
 PKCOL:	.WORD	0			; this pickup's fields, captured before
@@ -853,13 +892,6 @@ PKTYPE:	.WORD	0
 ; slots: ZX's own $D8FE routes quiver into the carry queue and key into an
 ; unrelated pre-existing flag, neither with a persistent icon; the wreath
 ; life-counter path is a faithful port of $D91A).
-
-; One knob for the whole HUD block below: every row position here is
-; written as <HUDROW0 + a small offset from this block's own lowest ZX-
-; decoded row (20.)>, so nudging the whole thing up or down (this port's
-; own display list doesn't line up with the ZX screen's row 0) is a
-; one-line edit instead of hunting down every literal.
-HUDROW0 = 21.
 
 ; Carried-items queue, ZX $D595 -- gold/flower only in this port (quiver
 ; goes to its own slot below, not the queue, a deliberate deviation).
@@ -878,16 +910,7 @@ CARRYPUSH:
 	SOB	R3, 10$
 	MOV	(SP)+, R0
 	MOVB	R0, CARRYQ
-	CALL	HUDCARRY
-	RETURN
-
-HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
-
-; Blank 2x2 icon -- same glyph-stream shape as the gold/flower icons
-; (2 glyphs, CR, 2 glyphs), space glyphs so it paints nothing but still
-; overwrites whatever icon used to be there.  Attribute value is
-; irrelevant with no ink to colour.
-CARRYBLANK:	.BYTE	040,040,001,040,040,000,004,004,377,004,004,000
+	;BR	HUDCARRY		; falls straight through
 
 ; Redraw all 8 carry slots at fixed HUD positions -- covers both $D94B's
 ; "just pushed one" and $DB98's "full refresh" call sites with one shared
@@ -925,6 +948,8 @@ HUDCARRY:
 	BLT	10$
 	RETURN
 
+HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
+
 ; Quiver -- this port's own dedicated always-shown HUD slot (see header
 ; note above; ZX's own $D8FE would route this into the carry queue
 ; instead).  Drawn once, on pickup.  Utilizes R0-R5.
@@ -934,8 +959,7 @@ QUIVPICKUP:
 	MOV	#LB567+2, R0		; upright/HUD quiver variant, its own 2-byte
 	MOV	#5., R1			; position header ($14,$A8) decodes to
 	MOV	#<HUDROW0+2.>, R2	; column 5. -- row bumped one lower
-	CALL	PRINTAT
-	RETURN
+	JMP	PRINTAT
 
 ; Key -- this port's own dedicated always-shown HUD slot (see header note
 ; above; ZX's own $D8FE only flips the unrelated $D59F re-seed flag here,
@@ -946,8 +970,7 @@ KEYPICKUP:
 	MOV	#LB52E+1, R0		; ZX $B52D/$B52E's own 2-byte position header
 	MOV	#8., R1			; ($20,$A0 -- LB52D's single byte plus
 	MOV	#HUDROW0, R2		; LB52E's first) decodes to column 8., row 20.
-	CALL	PRINTAT
-	RETURN
+	JMP	PRINTAT
 
 ; Wreath -- faithful port of $D91A: capped (max 9.) life counter, archer
 ; icon drawn once per pickup, count redrawn as a single ASCII digit next
@@ -973,8 +996,7 @@ WREATHPICKUP:
 	MOV	#LIVEBUF, R0		; ZX $DA09's own position bytes ($24,$B8)
 	MOV	#9., R1			; decode to column 9., row 23. -- one row
 	MOV	#<HUDROW0+3.>, R2	; below the archer, not aligned with it
-	CALL	PRINTAT
-	RETURN
+	BR	PRINTAT
 
 ;------------------------------------------------------------------------------
 ; The Ent, weapon seller -- port of ZX's $DF03.  Bring 3 gold slots to his
@@ -1021,8 +1043,7 @@ CARRYPOP:
 	BGE	50$
 	CLRB	(R4)+
 	BR	40$
-50$:	CALL	HUDCARRY
-	RETURN
+50$:	JMP	HUDCARRY
 
 ; Called once per frame from GAMELOOP.  Utilizes R0-R4.
 ENTCHECK:
@@ -1058,8 +1079,7 @@ ENTCHECK:
 	BNE	30$
 	MOV	#1, SWORDFLAG
 	MOV	#LB495, R0		; sword icon/message, own position header
-	CALL	PRINTSTR
-	RETURN
+	BR	PRINTSTR
 30$:	TST	BOWFLAG
 	BNE	40$
 	MOV	#1, BOWFLAG
@@ -1067,8 +1087,7 @@ ENTCHECK:
 	MOV	#LB567, R0		; quiver-bought confirmation icon
 	CALL	PRINTSTR
 	MOV	#LB4C1, R0		; bow icon/message
-	CALL	PRINTSTR
-	RETURN
+	BR	PRINTSTR
 40$:	MOV	#LB556+1, R0		; magic-arrow icon.  Leading pad byte skipped
 					; like gold/flower/quiver-laying -- LB556 has
 					; no embedded header the way sword/bow do, so
@@ -1293,7 +1312,7 @@ PRTCOMMITTIL:
 PRTCOMMITSHADOW:
 	MOV	PRTCROW, R4
 	SWAB	R4
-	BIC	#377, R4		; row * 400 (256.); SWAB also pulls in the
+	CLRB	R4			; row * 400 (256.); SWAB also pulls in the
 					; old high byte (0) -- drop it
 	ADD	PRTCOL, R4
 	ADD	#SHADOWPIX, R4		; -> this cell's pixel base
@@ -1335,7 +1354,7 @@ PRTCOMMITSHADOW:
 PRTCOMMITERASE:
 	MOV	PRTCROW, R4
 	SWAB	R4
-	BIC	#377, R4		; row * 400 (256.)
+	CLRB	R4			; row * 400 (256.)
 	ADD	PRTCOL, R4
 	ADD	#SHADOWPIX, R4		; -> this cell's pixel base
 	MOV	#8., R2
@@ -1577,8 +1596,7 @@ DRAWSPRITE:
 52$:	CLC
 	ROL	R4
 	ROL	R5
-	DEC	R3
-	BNE	52$
+	SOB	R3, 52$
 ;
 ; XOR the four output bytes into the shadow row, low end first
 ;
@@ -1658,8 +1676,7 @@ GLYPHDRAW:
 	MOV	SPRADR, GLYROWADR
 ;
 200$:	TST	GLYROWS
-	BNE	205$
-	JMP	RAMPSTAMP		; done -- shared ramp stamp (out of BEQ range)
+	BEQ	RAMPSTAMP		; done -- shared ramp stamp
 205$:
 	DEC	GLYROWS
 	MOV	#6, R5			; columns left in this row
@@ -1728,8 +1745,7 @@ RAMPSTAMP:
 	BEQ	85$
 	INC	R5
 85$:	INC	R2
-	DEC	R3
-	BNE	84$
+	SOB	R3, 84$
 	BIT	#100, SPRFLAG		; bit 6 => step the ramp per row
 	BEQ	86$
 	INC	R5
@@ -1947,14 +1963,14 @@ GUARDINIT:
 	CMP	R5, #3
 	BHIS	20$
 	MOVB	#3, 4(R4)		; active + erase-armed
-	MOVB	#0, 5(R4)
+	CLRB	5(R4)
 	MOVB	#24., 6(R4)
 	MOVB	#80., 7(R4)
-	MOVB	#0, 8.(R4)
+	CLRB	8.(R4)
 	MOVB	#24., 9.(R4)
 	MOVB	#80., 10.(R4)
 	MOV	#LAC51, 2(R4)
-	MOV	#0, R0
+	CLR	R0
 	MOV	#L8DC4, R1
 	MOV	#24., R2
 	MOV	#80., R3
@@ -1995,14 +2011,14 @@ GUARDINIT:
 	CMP	R5, #3
 	BHIS	22$
 	MOVB	#3, 4(R4)
-	MOVB	#0, 5(R4)
+	CLRB	5(R4)
 	MOVB	#96., 6(R4)
 	MOVB	#80., 7(R4)
-	MOVB	#0, 8.(R4)
+	CLRB	8.(R4)
 	MOVB	#96., 9.(R4)
 	MOVB	#80., 10.(R4)
 	MOV	#LAC51, 2(R4)
-	MOV	#0, R0
+	CLR	R0
 	MOV	#L8DC4, R1
 	MOV	#96., R2
 	MOV	#80., R3
@@ -2029,7 +2045,7 @@ GUARDINIT:
 	MOV	#L8DC4, R1
 	MOV	#72., R2
 	MOV	#80., R3
-	CALL	DRAWFRAME
+	JMP	DRAWFRAME
 23$:	RETURN
 
 ;------------------------------------------------------------------------------
@@ -2085,8 +2101,7 @@ DBGROOMDRAW:
 	MOV	#<DBGROOM+2>, R4	; -> the 3 glyph bytes
 	CALL	HEXCONV
 	MOV	#DBGROOM, R0
-	CALL	PRINTSTR
-	RETURN
+	JMP	PRINTSTR
   .ENDC
 
 ;------------------------------------------------------------------------------
@@ -2131,6 +2146,7 @@ GAMEMAIN:
 	ASL	R0			; * 2. = word offset
 	MOV	STARTROOMS(R0), CURROOM
   .ENDC
+	MOV	CURROOM, TREEROOM	; ZX $D3B6 -- the start-tree decoration room
 	CALL	ENTERROOM
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
   .IF NE DBGSHOWROOM
@@ -2394,8 +2410,7 @@ MOVEROBIN:
 ; state machine below drives him back to a movement state.
 ;
 	CMPB	ROBST, #6
-	BLO	8$
-	JMP	9$
+	BHIS	9$
 ;
 8$:	BIT	#PKEYLT, R0
 	BEQ	1$
@@ -2452,8 +2467,7 @@ MOVEROBIN:
 ;
 	BISB	#5, 4(R4)		; active + step requested
 	MOV	#L8D80, R1
-	CALL	OBJSTEP
-	RETURN
+	JMP	OBJSTEP
 
 ;------------------------------------------------------------------------------
 ; Robin's sit/walk state machine -- the port of the ZX $CD42 handlers for
@@ -2497,7 +2511,7 @@ RSSIT:	TST	FIREHELD		; fire takes precedence over movement,
 	JMP	COMMIT
 10$:	TST	R0
 	BNE	13$
-	JMP	RSSTAY			; no key => keep sitting
+	RETURN				; no key => keep sitting (RSSTAY is just this)
 13$:	BIT	#PKEYRT, R0
 	BNE	TORUNR
 	BIT	#PKEYLT, R0
@@ -2509,7 +2523,7 @@ RSSIT:	TST	FIREHELD		; fire takes precedence over movement,
 ; --- states 6 / 7: stick swing ---
 RSSTICK:	DEC	SWINGCNT
 	BLE	12$
-	JMP	RSSTAY			; (too far for BR's branch range)
+	RETURN				; (RSSTAY is just this, was too far for BR)
 12$:	BIT	#PKEYRT, R0
 	BNE	TORUNR
 	BIT	#PKEYLT, R0
@@ -2551,7 +2565,7 @@ RSRUNU:	TST	R0
 	BNE	TORUNR
 	BIT	#PKEYLT, R0
 	BNE	TORUNL
-	BR	RSSTAY			; up only => stay
+	RETURN				; up only => stay (RSSTAY is just this)
 
 ; --- state 5: running down ---
 RSRUND:	TST	R0
@@ -2562,7 +2576,7 @@ RSRUND:	TST	R0
 	BNE	TORUNR
 	BIT	#PKEYLT, R0
 	BNE	TORUNL
-	BR	RSSTAY
+	RETURN				; RSSTAY is just this
 
 ; --- transitions: R1 = new state, R2 = new list, then COMMIT ---
 TORUNR:	MOV	#2, R1
@@ -2587,7 +2601,7 @@ TORUNU:	MOV	#4, R1
 TORUND:	MOV	#5, R1
 	MOV	#LRUND, R2		; front view -- facing unchanged
 	BR	COMMIT
-TOSITR:	MOV	#0, R1
+TOSITR:	CLR	R1
 	MOV	#LSITR, R2
 	BICB	#200, 1(R4)
 	BR	COMMIT
@@ -2737,7 +2751,7 @@ ROOMEDGE:
 	CLR	R3
 	BISB	7(R4), R3
 	MOV	#L8D80, R1
-	CALL	DRAWFRAME
+	JMP	DRAWFRAME
 90$:	RETURN
 
 ;------------------------------------------------------------------------------
