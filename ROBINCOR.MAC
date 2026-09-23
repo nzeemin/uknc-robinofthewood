@@ -4,13 +4,13 @@
 ;------------------------------------------------------------------------------
 
 ; !!DEBUG!! uncomment + set to pin GAMEMAIN's starting room
-DBGINITROOM = ^X027
+;DBGINITROOM = ^X027
 
 ; !!DEBUG!! 1 = show CURROOM as 3 hex digits, bottom-right of the HUD
 DBGSHOWROOM = 1
 
 ; !!DEBUG!! 1 = fill the carry FIFO with gold bags on game start
-DBGGOLDMAX = 1
+DBGGOLDMAX = 0
 
 ; !!DEBUG!! Ent's room -- stand-in for ZX's $D38E random 4-room roll, not
 ; yet ported.  Robin must be in this room for a purchase to fire.
@@ -1781,7 +1781,13 @@ SPRXOR:
 ;    8,9,10   next frame number, X, Y -- the caller fills these and sets bit 2
 
 NOBJ	= 6.			; Robin + up to 5 guests
-OBJSZ	= 11.
+; 11. bytes of real fields + 1 pad byte.  OBJSZ must be EVEN: entries are
+; laid out back-to-back starting at OBJTAB (itself .EVEN below), so an
+; odd OBJSZ would put every odd-numbered slot's own base at an odd
+; address -- and this record has word fields at offset 2/3 (frame-list
+; pointer) written directly (e.g. "MOV #sometable, 2(R4)"), which traps
+; as an illegal unaligned access.
+OBJSZ	= 12.
 
 	.EVEN				; keep every entry's word fields (2/3, 8/9-as-word...)
 					; at a consistent, even-safe offset from OBJTAB
@@ -1934,151 +1940,345 @@ GUARDROLL:
 	SOB	R3, 10$
 	RETURN
 
-; Is the guard whose GSEED entry is at R4 present in CURROOM?  The port of
-; $AA5A-$AA67's proximity test (column distance, folded to 0-15, "within 3").
-; R0 := the folded distance (present if < 3).  Utilizes R0, R1.
+; Is the guard whose GSEED entry is at R4 present in CURROOM, and if so
+; which $DEAB/$DEC7/$DEE3 route entry applies?  The port of $AA31's own
+; A = (home_column - room_column + 1) AND $0F test: entry 0/1/2 for Robin
+; one column right of / on / one column left of the guard's home; A>=3
+; means not present.
+; R0 := 0-2 (route entry / presence) or a value >= 3 (absent).
+; Utilizes R0, R1.
 GPRESENT:
 	MOV	CURROOM, R0
 	BIC	#^C17, R0		; this room's column nibble
 	CLR	R1
-	BISB	(R4), R1		; the guard's seed byte 0
-	SUB	R1, R0
-	NEG	R0
-	INC	R0
-	BIC	#^C17, R0
+	BISB	(R4), R1		; the guard's home column (seed byte 0)
+	SUB	R0, R1			; home - room
+	INC	R1			; + 1
+	BIC	#^C17, R1		; AND $0F
+	MOV	R1, R0
 	RETURN
 
 ;------------------------------------------------------------------------------
-; Phase 1 guard spawn -- real object-table entries, static (no $AA31 step, no
-; movement) until Phase 2 lands.  Which of the 4 slots are actually present
-; now varies by room and reshuffles on every visit (GUARDROLL + GPRESENT,
-; above); only the spawn X/Y and starting frame below are still placeholders.
+; Guard spawn on room entry, port of $C276's rebuild loop ($C337-$C36F) plus
+; its four immediate $AA31 calls ($C371-$C378).  Each of the 4 OBJTAB guard
+; slots is cleared; a slot whose guard is present this room (GPRESENT < 3)
+; is marked active and given the walk cycle matching its GSEED bit 7, with
+; bit 6 synced (port of $C353-$C364).  The four GUARDSTEP calls at the end
+; then resolve the real X/visibility and do the first draw.
 ;
-; Record fields, frame base (L8DC4) and frame-list format are all faithful, so
-; a guard is a first-class OBJSTEP-compatible object from the start -- future
-; sword/arrow hit-testing or movement needs no record-format change, only a
-; CALL OBJSTEP added to the game loop for these slots.
-;
-; Y = 80. is not a placeholder -- it's the ZX's own static ROM data: every one
-; of $AC13's 5 entries (all 4 room guards and Bishop's escort) ships with
-; offset +0A = $50 (80.), and nothing in $C276 or $AA31 ever writes it again.
-; Every guard sits at that one fixed row, in every room, for the whole game --
-; confirmed against the disassembly, not a simplification on our part.
-;
-; X *is* still a stand-in.  $C276 doesn't set a guard's X either -- it's
-; resolved live by $AA31/$DDF0 from the $DEAB route table keyed on the guard's
-; home-room nibble, and $DEAB's real content is an open, contradictory
-; question in the source disassembly itself (reads all-zero live, but as
-; code-shaped bytes in the static listing) -- not a gap in this port.
-; Swapping in real X values later only touches this table.  Confirmed
-; separately: the ZX never validates a guard's resolved position against
-; room attributes either (no equivalent of Robin's $DD6F-family checks in
-; $AA31/$C276/$DDF0) -- placement safety on the real game comes entirely from
-; $DEAB's curated data, which is exactly what we don't have yet.
-;
-; The frame-list choice (LAC51, the backward walk cycle) IS faithful, not a
-; guess: $C276 picks it from bits 4/7 of a per-guard byte in $8A39; GUARDROLL
-; keeps those bits zero the same way $CE0A's fresh seed can, so LAC51 -- what
-; $C276 selects on a zero byte -- has no fixed "correct" alternative to diverge
-; from either.
+; Y = 80. is authentic: every $AC13 entry ships with +0A = $50 and nothing on
+; the guard path ever writes it -- guards move purely horizontally.
 
+; Port of $DDF0, run on every room entry just before the spawn.  Its route
+; re-open rescan tests the $DEAB table, which is all-zero live (see LDEAB),
+; so it reduces to: for each guard present this room, clear the patrol
+; cursor's low 2 bits.  A guard not present keeps its cursor untouched.
+GUARDCURCLR:
+	MOV	#4., R3
+	MOV	GGROUP, R4
+10$:	CALL	GPRESENT
+	CMP	R0, #3
+	BHIS	11$
+	BICB	#3, 1(R4)
+11$:	ADD	#3, R4
+	SOB	R3, 10$
+	RETURN
+;
 GUARDINIT:
 	CALL	GROUPADRLIVE		; GGROUP = the live band (plain index,
 					; matches ZX $C291), not the respawn target
 	MOV	R0, GGROUP
+	CALL	GUARDCURCLR
 ;
-	MOV	GGROUP, R4		; guard 1 -- object slot 1 (0 is Robin)
+	MOV	#4., R2			; 4 guard slots
+	MOV	GGROUP, R3		; R3 -> this slot's GSEED entry
+	MOV	#<OBJTAB+OBJSZ>, R5	; R5 -> its OBJTAB record (slot 0 is Robin)
+10$:	MOV	R3, R4
 	CALL	GPRESENT
-	MOV	R0, R5			; GSPCLR clobbers R0 -- keep the distance in R5
-	MOV	#<OBJTAB+OBJSZ>, R4
+	MOV	R0, R1			; GSPCLR clobbers R0 -- keep A in R1
+	MOV	R5, R4
 	CALL	GSPCLR
-	CMP	R5, #3
-	BHIS	20$
-	MOVB	#3, 4(R4)		; active + erase-armed
-	CLRB	5(R4)
-	MOVB	#24., 6(R4)
-	MOVB	#80., 7(R4)
-	CLRB	8.(R4)
-	MOVB	#24., 9.(R4)
-	MOVB	#80., 10.(R4)
-	MOV	#LAC51, 2(R4)
+	CMP	R1, #3
+	BHIS	12$			; not present this room -- leave it cleared
+	MOVB	#1, 4(R4)		; active only; GUARDSTEP arms the first draw
+	BITB	#200, 2(R3)		; port of $C353-$C364: walk cycle from bit 7,
+	BEQ	11$			; bit 6 synced to match
+	MOV	#LAC5C, 2(R4)
+	BISB	#100, 2(R3)
+	BR	12$
+11$:	MOV	#LAC51, 2(R4)
+	BICB	#100, 2(R3)
+12$:	ADD	#3, R3
+	ADD	#OBJSZ, R5
+	SOB	R2, 10$
+;
+; port of $C371-$C378: four immediate $AA31 calls -- GSTEPIDX's own cycling
+; touches every slot once, resolving real X/visibility and drawing before
+; the room is shown.
+	CALL	GUARDSTEP
+	CALL	GUARDSTEP
+	CALL	GUARDSTEP
+	BR	GUARDSTEP
+
+;------------------------------------------------------------------------------
+; Guard movement -- the port of ZX $AA31, minus the shooting/hotspot-claim
+; branch ($AB6A-$ABAD, the $BF69 table) -- out of scope for now; this
+; port's version always behaves as if that shot attempt was rejected,
+; same as $AA31 itself whenever the proximity/facing/random gate fails.
+;
+; Also simplified from $AB0C-$AB4D: ZX re-resolves which $AC13 slot a
+; guard's position belongs to via a room-nibble byte separate from home
+; column, because $AC13 can hold stale cross-room data mid-transition.
+; This port's OBJTAB guard slots are rebuilt fresh every room entry by
+; GUARDINIT, always in sync with CURROOM, so there's no stale-slot
+; problem to resolve -- this always operates on the current room's own
+; 4 slots directly.
+;
+; Guard pixel X, port of $AAFA-$AB31 (Stage 6): a fresh GPRESENT each call
+; (A = 0/1/2) decides both visibility and X.  A=1 (home == room column):
+; X = patrol cursor directly.  A=2 (home == room+1) with cursor<16.: X =
+; cursor+112. -- the guard peeking in from its home column's own room, near
+; this room's right edge.  Anything else (A=0, or A=2 with cursor>=16.): not
+; drawn this frame (port of $ABF0) -- the guard is simulated across 3
+; columns but only ever visible in 2.  Y stays the fixed 80. already
+; established elsewhere in this port as authentic ZX behaviour.
+;
+; Slot cycle, port of $AA32: which of the 4 guards $AA31 touches this call.
+; The counter advances every call and never skip-returns -- every call fully
+; processes one guard, so each guard updates once per 4 calls.
+
+GSTEPIDX:	.WORD	0		; which of the 4 guard slots is next, 0-3
+
+; $DEAB/$DEC7/$DEE3 route-entry start address, indexed by GPRESENT's 0-2.
+GROUTETAB:	.WORD	LDEAB, LDEC7, LDEE3
+
+; Port of $AA31 in full -- no separate "process one guard" entry exists in
+; the real routine; $AA31 always reads its own counter (here GSTEPIDX) to
+; pick the guard.  Called once per frame from GAMELOOP, AND called directly
+; 4 times in a row by GUARDINIT on room entry (port of $C276's $C371-$C378,
+; which calls $AA31 once per guard immediately on every room change) so a
+; freshly-shown guard's real position/frame is resolved before the room is
+; even painted -- GSTEPIDX's own cycling naturally touches all 4 guards
+; over those 4 calls, exactly like $AA32's counter does across $C276's loop.
+; Utilizes R0-R5.
+GUARDSTEP:
+	MOV	GSTEPIDX, R2		; 0-3 -- this call's guard slot
+	INC	GSTEPIDX
+	BIC	#^C3, GSTEPIDX		; wrap 0-3 -- 4 is a power of 2
+;
+	MOV	R2, R3
+	ASL	R3
+	ADD	R2, R3			; R3 = idx * 3 -- GSEED entry offset
+	MOV	GGROUP, R4
+	ADD	R3, R4			; R4 -> this guard's GSEED entry
+;
+	MOV	#OBJTAB, R5		; R5 -> this guard's OBJTAB record
+	MOV	R2, R1
+	INC	R1			; slot number 1-4 (0 is Robin)
+6$:	ADD	#OBJSZ, R5
+	SOB	R1, 6$
+;
 	CLR	R0
-	MOV	#L8DC4, R1
-	MOV	#24., R2
-	MOV	#80., R3
-	CALL	DRAWFRAME
-20$:
+	BISB	2(R4), R0		; GSEED byte 2 (flags)
+	BIT	#20, R0			; bit 4 -- dead/away
+	BNE	40$			; skip the patrol step, straight to frame-select
 ;
-	MOV	GGROUP, R4		; guard 2 -- mirrored, facing left
-	ADD	#3, R4
-	CALL	GPRESENT
-	MOV	R0, R5
-	MOV	#<OBJTAB+<2*OBJSZ>>, R4	; macro11 has no operator precedence --
-					; the inner <> is required, else this
-					; parses as (OBJTAB+2)*OBJSZ
-	CALL	GSPCLR
-	CMP	R5, #3
-	BHIS	21$
-	MOVB	#3, 4(R4)
-	MOVB	#200, 5(R4)
-	MOVB	#48., 6(R4)
-	MOVB	#80., 7(R4)
-	MOVB	#200, 8.(R4)
-	MOVB	#48., 9.(R4)
-	MOVB	#80., 10.(R4)
-	MOV	#LAC51, 2(R4)
-	MOV	#200, R0
-	MOV	#L8DC4, R1
-	MOV	#48., R2
-	MOV	#80., R3
-	CALL	DRAWFRAME
-21$:
+	CALL	GPRESENT		; R4 already -> the GSEED entry
+	CMP	R0, #3.
+	BHIS	40$			; not in one of the 3 live columns this frame
 ;
-	MOV	GGROUP, R4		; guard 3
-	ADD	#6, R4
+; route/direction scan, port of $AA6E-$AAD9
+;
+	ASL	R0			; word index into GROUTETAB
+	MOV	GROUTETAB(R0), R2	; R2 -> chosen route entry's start (28 bytes,
+					; scannable start-to-end -- no separate header
+					; to skip: $AA6F-$AA8E indexes cursor>>2
+					; straight off the entry base, and 28*4=112
+					; exactly spans the 0-111 cursor range
+	CLR	R1
+	BISB	1(R4), R1		; the patrol cursor (byte 1)
+	MOV	R1, R3
+	BIC	#^C3, R3		; low 2 bits
+	BEQ	10$
+	MOV	#4., R0			; budget 4
+	BR	11$
+10$:	MOV	#3., R0			; budget 3
+11$:	ASR	R1
+	ASR	R1			; cursor >> 2 -- table offset into the entry
+	ADD	R1, R2			; -> scan start
+	MOV	R0, R3			; scan count
+12$:	TSTB	(R2)
+	BNE	13$			; non-zero step byte found
+	INC	R2
+	SOB	R3, 12$
+	BR	15$			; all-zero -- direction-rotate fallback
+;
+13$:
+	CLR	R1			; toggle GSEED byte 2's mirror bits 6-7 --
+	BISB	2(R4), R1		; port of $AA9D-$AAA8's SRA/AND $C0/XOR $80:
+					; new bit7 := NOT(old bit7), new bit6 :=
+					; old bit7 (a rotate-with-complement, NOT a
+					; plain flip of both bits -- those only
+					; agree when old bit6<>bit7)
+	MOV	R1, R0
+	BIC	#^C200, R0		; isolate old bit7 (0 or 200)
+	BEQ	16$
+	MOV	#300, R0		; old bit7 set -> shifted pair = 300
+	BR	17$
+16$:	CLR	R0			; old bit7 clear -> shifted pair = 0
+17$:	MOV	#200, R3
+	XOR	R3, R0			; final bits 6-7 = shifted XOR 200
+	BIC	#300, R1		; clear old bits 6-7, keep 0-5
+	BIS	R0, R1			; merge in the new bits 6-7
+	MOVB	R1, 2(R4)
+	BR	20$
+;
+15$:	CALL	PRNG			; all-zero scan: ~1-in-16 chance of a
+	BIC	#^C17, R0		; facing check this call, port of $AAC4's
+	BNE	20$			; LD A,R / AND $0F / JR NZ
+;
+; port of $AAAD-$AAD7: face toward whichever side Robin is actually on, NOT
+; a coin-flip -- the real rotate-through-carry sequence resolves to exactly
+; this (traced bit-by-bit), via a Z80 address-arithmetic trick against $DEC7
+; this port can't replicate literally.  Reuses GPRESENT's own 0/1/2 (same
+; classification, freshly read since the step above may have just moved the
+; home column): A=1 (Robin on the home column) leaves facing alone; A=0/2
+; set bit 7 toward that side, so facing only changes when Robin crosses
+; sides.
 	CALL	GPRESENT
-	MOV	R0, R5
-	MOV	#<OBJTAB+<3*OBJSZ>>, R4
-	CALL	GSPCLR
-	CMP	R5, #3
-	BHIS	22$
-	MOVB	#3, 4(R4)
-	CLRB	5(R4)
-	MOVB	#96., 6(R4)
-	MOVB	#80., 7(R4)
-	CLRB	8.(R4)
-	MOVB	#96., 9.(R4)
-	MOVB	#80., 10.(R4)
-	MOV	#LAC51, 2(R4)
+	CMP	R0, #1
+	BEQ	20$
+	CLR	R1
+	BISB	2(R4), R1		; R1 = old byte2
+	MOV	R1, R2			; keep a copy to read the OLD bit 7 from
+	BIC	#300, R1		; clear bits 6-7 in the working copy
+	BIT	#200, R2		; port of $AACC-$AACF's rotation: new bit 6
+	BEQ	19$			; becomes the OLD bit 7 (same pattern as 13$'s
+	BIS	#100, R1		; mirror-toggle) -- NOT a copy of the new bit
+19$:					; 7, which would make Stage 7a's bits-equal
+					; gate see a false match and skip the resync
+					; it should do whenever bit 7 actually changed
+	CMP	R0, #0			; A=0 -- home==room-1, Robin is to this guard's
+	BNE	18$			; RIGHT -- bit 7 must be SET (increment path,
+	BIS	#200, R1		; per the patrol-step fix) to walk toward him,
+					; not clear/decrement (away from him)
+18$:	MOVB	R1, 2(R4)
+;
+; patrol-cursor step, port of $AAD9-$AAF9 -- byte 2 bit 7 picks inc/dec
+; of byte 1 (the 0-111. cursor); wrap carries +/-1 into byte 0 (home
+; column), AND $0F.
+;
+20$:	CLR	R0
+	BISB	2(R4), R0
+	BIT	#200, R0		; port of $AAD9's BIT 7 / JR NZ: bit 7 set
+	BNE	30$			; -> increment path
+;
+	CLR	R1			; decrement path
+	BISB	1(R4), R1
+	DEC	R1
+	BGE	25$
+	ADD	#112., R1
 	CLR	R0
-	MOV	#L8DC4, R1
-	MOV	#96., R2
-	MOV	#80., R3
-	CALL	DRAWFRAME
-22$:
+	BISB	(R4), R0
+	DEC	R0
+	BIC	#^C17, R0
+	MOVB	R0, (R4)
+25$:	MOVB	R1, 1(R4)
+	BR	40$
 ;
-	MOV	GGROUP, R4		; guard 4
-	ADD	#11, R4
-	CALL	GPRESENT
-	MOV	R0, R5
-	MOV	#<OBJTAB+<4*OBJSZ>>, R4
-	CALL	GSPCLR
-	CMP	R5, #3
-	BHIS	23$
-	MOVB	#3, 4(R4)
-	MOVB	#200, 5(R4)
-	MOVB	#72., 6(R4)
-	MOVB	#80., 7(R4)
-	MOVB	#200, 8.(R4)
-	MOVB	#72., 9.(R4)
-	MOVB	#80., 10.(R4)
-	MOV	#LAC51, 2(R4)
-	MOV	#200, R0
+30$:	CLR	R1			; increment path
+	BISB	1(R4), R1
+	INC	R1
+	CMP	R1, #112.
+	BLT	35$
+	SUB	#112., R1
+	CLR	R0
+	BISB	(R4), R0
+	INC	R0
+	BIC	#^C17, R0
+	MOVB	R0, (R4)
+35$:	MOVB	R1, 1(R4)
+;
+; Stage 6, port of $AAFA-$AB31 -- resolve screen X (and visibility) from the
+; guard's (possibly just-stepped) home column/patrol cursor, using a FRESH
+; GPRESENT (A = 0/1/2) against the current room, not the one from before the
+; step.  A=1 (home == room column): X = cursor directly.  A=2 (home == room+1)
+; with cursor<$10: X = cursor+112, the wrap-over near this room's edge.
+; Anything else (A=0, or A=2 with cursor>=$10): not visible this frame --
+; simulated but not drawn, port of $ABF0.
+;
+40$:	CALL	GPRESENT		; R4 -> GSEED entry still valid
+	CLR	R1
+	BISB	1(R4), R1		; patrol cursor
+	CMP	R0, #1
+	BEQ	41$
+	CMP	R0, #2
+	BNE	70$
+	CMP	R1, #16.
+	BHIS	70$
+	ADD	#112., R1
+41$:	MOVB	R1, 9.(R5)		; next X
+	MOVB	#80., 10.(R5)		; next Y -- always 80., faithful to ZX
+;
+; Stage 7a, port of $AB34-$AB67 -- frame-list state machine.  Dead (bit 4)
+; leaves the frame list alone; a fresh hit (bit 5) promotes to dead and
+; switches to the death sequence; otherwise, if bits 6-7 disagree (a turn is
+; pending), bit 7 picks a turn lead-in and bit 6 is synced to it (port of
+; $AB5B/$AB5F), so later calls see agreement and leave the walk cycle alone.
+	CLR	R3
+	BISB	2(R4), R3		; flags byte, held across both bit tests below
+	BIT	#20, R3			; bit 4 -- already dead/away
+	BNE	60$			; leave the frame list, just redraw
+	BIT	#40, R3			; bit 5 -- just hit (set by a future sword/
+	BEQ	42$			; arrow hit-test, not ported yet -- inert
+					; for now, wired for when it lands)
+	BICB	#40, 2(R4)		; promote hit -> persistent dead
+	BISB	#20, 2(R4)
+	MOV	#LAC7B, 2(R5)		; death sequence, full play from the top
+	BR	60$
+;
+; port of $AB50-$AB53: bits 6-7 EQUAL (00 or 11) means ZX skips this reset
+; entirely and goes to the proximity/shoot-claim check at $AB6A -- shooting
+; is out of scope (see the header note), so this port's stand-in is to just
+; skip straight to the redraw, leaving the current frame-list/cursor alone.
+42$:	MOV	R3, R0
+	BIC	#^C300, R0		; isolate bits 6-7
+	BEQ	60$			; 00 -- equal, skip the reset below
+	CMP	R0, #300
+	BEQ	60$			; 11 -- equal, skip the reset below
+	BIT	#200, R3		; bit 7 -- which walk cycle this guard joins
+	BEQ	43$
+	MOV	#LAC67, 2(R5)
+	BISB	#100, 2(R4)		; sync bit 6 to match bit 7 (both set)
+	BR	60$
+43$:	MOV	#LAC6B, 2(R5)
+	BICB	#100, 2(R4)		; sync bit 6 to match bit 7 (both clear)
+	BR	60$
+;
+; Not-drawn tail, port of $ABF0 -- skips stages 7a/7b; the animation still
+; advances (OBJSTEP's own hold-counter/cursor-walk), the list is set straight
+; from bit 7 (port of $AC02-$AC0C, bit 6 untouched), and any erase armed by
+; the last real draw still fires.
+70$:	CLR	R0
+	BISB	2(R4), R0
+	BIT	#200, R0		; bit 7 set -> LAC5C (right), clear -> LAC51
+	BEQ	71$			; (left) -- same mapping as GUARDINIT and 42$
+	MOV	#LAC5C, 2(R5)
+	BR	72$
+71$:	MOV	#LAC51, 2(R5)
+72$:	BICB	#4, 4(R5)		; port of $ABF1's RES 2 -- suppress the draw;
+					; an erase armed by the last draw still fires,
+					; from its saved frame/X/Y at offsets 5-7
 	MOV	#L8DC4, R1
-	MOV	#72., R2
-	MOV	#80., R3
-	JMP	DRAWFRAME
-23$:	RETURN
+	MOV	R5, R4
+	JMP	OBJSTEP
+;
+60$:	BISB	#4, 4(R5)		; port of $ABE3 -- arm step only; OBJSTEP's
+					; own step block arms the erase for next call
+	MOV	#L8DC4, R1		; guard frame base
+	MOV	R5, R4			; OBJSTEP takes the record in R4 (R4 was the
+					; GSEED entry until here)
+	JMP	OBJSTEP
 
 ;------------------------------------------------------------------------------
 ; Debug HUD: print CURROOM as 3 hex digits at the top-right of the play area
@@ -2158,6 +2358,7 @@ GAMEMAIN:
 	CLR	ENTPAID
 	CLR	ENTBOWCD
 	CLR	ARROWHITS
+	CLR	GSTEPIDX
 ;
   .IF NE DBGGOLDMAX
 	MOV	#8., R0			; fill every carry slot with gold, no shift
@@ -2209,7 +2410,7 @@ GAMEMAIN:
 	MOV	#RSPAWNY, R3
 	CALL	DRAWFRAME
 ;
-	CALL	GUARDINIT		; !!TEMP!! Phase 1: static test guards, see the note above it
+	CALL	GUARDINIT		; spawn this room's guards (ZX $C276)
 ;
 GAMELOOP:
 	MOV	FRAMES, GAMEFRAME	; remember frame number
@@ -2220,6 +2421,7 @@ GAMELOOP:
 	CALL	ROOMEDGE		; hand off to the next room at the L/R edge
 	CALL	OBJPICKUP		; erase any pickup Robin is standing on
 	CALL	ENTCHECK		; the Ent's weapon-purchase transaction
+	CALL	GUARDSTEP		; one guard's movement/animation this frame
 20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;
@@ -2683,14 +2885,60 @@ LTURNL:	.BYTE	015, 377, <LRUNLL&377>, <LRUNLL/400>	; 1 lead-in, then run-left lo
 LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
 	.EVEN
 
-; Guard walk-cycle frame lists, ZX $AC51/$AC5C -- the two "plain walk" lists
-; $C276 picks between (the turn lead-ins and the $AC7B idle-away list aren't
-; needed until guards actually move).
+; Guard frame lists, ZX $AC51-$AC7F.  Frames via L8DC4: $00-$07 walk right
+; (8 distinct), $08-$0B walk left with shield (4 distinct, played twice),
+; $0C front (the turn lead-in frame), $0D/$0E fire right/left.  LAC51/LAC5C
+; are the plain walk cycles (GUARDINIT, GUARDSTEP's not-drawn tail); LAC67/
+; LAC6B are turn lead-ins (GUARDSTEP Stage 7a); LAC6F/LAC75 (aim) are unused
+; until shooting is ported; LAC7B/LAC7F are wired to the hit/dead path.
 
 LAC51:	.BYTE	013, 012, 011, 010, 013, 012, 011, 010, 377	; backward walk
 	.BYTE	<LAC51&377>, <LAC51/400>
 LAC5C:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 377	; forward walk
 	.BYTE	<LAC5C&377>, <LAC5C/400>
+LAC67:	.BYTE	014, 377, <LAC5C&377>, <LAC5C/400>	; 1 turn frame, joins forward
+LAC6B:	.BYTE	014, 377, <LAC51&377>, <LAC51/400>	; 1 turn frame, joins backward
+LAC6F:	.BYTE	015, 015, 015, 377, <LAC5C&377>, <LAC5C/400>	; 3 turn frames,
+							; joins forward -- kneel/aim
+							; right ($AA31's $BF69 claim)
+LAC75:	.BYTE	016, 016, 016, 377, <LAC51&377>, <LAC51/400>	; 3 turn frames,
+							; joins backward -- kneel/aim
+							; left
+;
+; Death sequence, ZX $AC7B: 2 turn frames, then local frames $10-$12 (front/
+; dying/dead -- LB9A36/LB9A56/LB9A76 via L8DC4), FF-terminated looping to its
+; own LAC7F (4 bytes in, at the $12/dead byte) so it parks there forever.  A
+; fresh kill starts at LAC7B and plays the whole thing; a room re-entry that
+; already holds a corpse starts at LAC7F directly, showing the dead pose with
+; no replay -- see ZX $AB42/$AB4A vs $C34A/$C276.
+LAC7B:	.BYTE	014, 014, 020, 021
+LAC7F:	.BYTE	022, 377, <LAC7F&377>, <LAC7F/400>
+	.EVEN
+
+; Guard route table, ZX $DEAB -- 3 entries of 28 bytes, indexed by $AA31's
+; A = (home column - room column + 1) AND $0F: entry 0/1/2 for the guard's
+; home one column left of / on / one column right of the room.  Read by
+; GUARDSTEP's route scan (13$), which only tests zero/non-zero.
+;
+; All-zero on purpose.  In the ZX this region ships holding one-shot startup
+; code (the menu/IM2 init path), which is blanked after it runs and reused as
+; the route buffer; the only thing that ever refills it is a copy from $E982,
+; whose contents are still unknown.  So live it reads as zero, the route scan
+; never finds a step, and direction changes come only from the ~1-in-16
+; facing check (15$).  The static listing's code bytes here are not route
+; data -- using them made guards turn constantly.
+LDEAB:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
+LDEC7:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
+LDEE3:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
 	.EVEN
 
 ;------------------------------------------------------------------------------
@@ -2767,7 +3015,7 @@ ROOMEDGE:
 80$:	MOV	R0, CURROOM
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
-	CALL	GUARDINIT		; !!TEMP!! placeholder spawn spots, gated by GPRESENT
+	CALL	GUARDINIT		; spawn this room's guards (ZX $C276)
   .IF NE DBGSHOWROOM
 	CALL	DBGROOMDRAW		; room number, top-right of the play area
   .ENDC
