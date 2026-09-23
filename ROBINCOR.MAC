@@ -1842,7 +1842,9 @@ GSPCLR:					; clear OBJSZ bytes at R4, preserving R4
 ; does -- 4 buckets shared across many rooms, not one entry per room.
 
 GSEED:	.BLKB	4*4*3
-GGROUP:	.WORD	0		; this room's group base in GSEED, set by GROUPADR
+GGROUP:	.WORD	0		; this room's LIVE group base in GSEED, set by
+				; GROUPADRLIVE (GUARDINIT) -- not GROUPADR's
+				; respawn-target index (GUARDROLL)
 
 ; Fill the whole table with fresh randomness -- the port of $CE0A's guard-seed
 ; loop.  Call once at game start, after RNGINIT.  R3 (not R1) is the loop
@@ -1861,11 +1863,13 @@ GSEEDINIT:
 	SOB	R3, 10$
 	RETURN
 
-; R0 := the GSEED group base address for CURROOM -- the port of $C3FA, applied
-; to our CURROOM the same way $C548 feeds it (both are the same packed
-; room-index scheme).  Logical shifts throughout (CLC/ROR, not ASR) since
-; CURROOM - 32. can go negative for the first 32. rooms and ASR would sign-fill
-; from that.  Utilizes R0, R1.
+; R0 := the GSEED group base address for CURROOM -- the port of $C3FA as
+; called from $C278, the *respawn-target* index: room - $20 first, then
+; masked.  This is deliberately offset from the room actually being
+; entered -- see GROUPADRLIVE and GUARDROLL below for why that's faithful,
+; not a bug on our part.  Logical shifts throughout (CLC/ROR, not ASR)
+; since CURROOM - 32. can go negative for the first 32. rooms and ASR
+; would sign-fill from that.  Utilizes R0, R1.
 GROUPADR:
 	MOV	CURROOM, R0
 	SUB	#32., R0
@@ -1884,12 +1888,39 @@ GROUPADR:
 	ADD	#GSEED, R0
 	RETURN
 
+; R0 := the GSEED group base address for CURROOM -- the port of $C3FA as
+; called from $C291, the *live* index: plain room number, no offset.  This
+; is the band actually shown/spawned this room (GGROUP below); GROUPADR's
+; offset version is only ever the respawn target, never this.  Utilizes
+; R0, R1.
+GROUPADRLIVE:
+	MOV	CURROOM, R0
+	.REPT	4
+	CLC
+	ROR	R0
+	.ENDR				; room >> 4, logical
+	BIC	#^C3, R0		; & 3 -- group 0-3
+	MOV	R0, R1
+	ASL	R0
+	ASL	R0
+	ASL	R0			; group * 8.
+	ASL	R1
+	ASL	R1			; group * 4.
+	ADD	R1, R0			; group * 12.
+	ADD	#GSEED, R0
+	RETURN
+
 ; Re-roll one room-group's 4 guard seeds -- the port of $C276's $C282-$C28F
-; loop.  Runs on every room entry, not just once, so a guard's presence
-; reshuffles each time you come back.  Utilizes R0-R4.
+; loop, fed from GROUPADR's offset (respawn-target) index, exactly as ZX's
+; own $C278 feeds it.  Runs on every room entry, but -- because that index
+; is deliberately 2 map rows away from GGROUP's live band (GROUPADRLIVE,
+; used by GUARDINIT below) -- it never reshuffles the band actually being
+; shown.  A quick leave-and-return keeps guards/corpses exactly where they
+; were; only reaching a room 2 rows away re-rolls that original band.
+; Matches observed ZX hardware behaviour (docs/Actors.md, "Room guards").
+; Utilizes R0-R4.
 GUARDROLL:
 	CALL	GROUPADR
-	MOV	R0, GGROUP
 	MOV	R0, R4
 	MOV	#4, R3
 10$:	CALL	PRNG			; R0 = a fresh random byte
@@ -1952,7 +1983,8 @@ GPRESENT:
 ; from either.
 
 GUARDINIT:
-	CALL	GROUPADR
+	CALL	GROUPADRLIVE		; GGROUP = the live band (plain index,
+					; matches ZX $C291), not the respawn target
 	MOV	R0, GGROUP
 ;
 	MOV	GGROUP, R4		; guard 1 -- object slot 1 (0 is Robin)
