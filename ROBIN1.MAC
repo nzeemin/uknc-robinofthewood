@@ -654,21 +654,23 @@ STANTLER:
 ; session -- see docs/DisplayList.md's "Palette word format" section.  The
 ; low 12 bits of every entry are SRCPAL's own codes 4-6, untouched since the
 ; antler glyph only ever uses code 7 (the top nibble, bits 15-12).
-ANTLERTAB:	.WORD	177334		; ENERGY 15 -- bright white
-		.WORD	077334		; ENERGY 14 -- white
-		.WORD	167334		; ENERGY 13 -- bright yellow
-		.WORD	067334		; ENERGY 12 -- yellow
-		.WORD	157334		; ENERGY 11 -- bright cyan
-		.WORD	057334		; ENERGY 10 -- cyan
-		.WORD	147334		; ENERGY 9 -- bright green
-		.WORD	047334		; ENERGY 8 -- green
-		.WORD	137334		; ENERGY 7 -- bright magenta
-		.WORD	037334		; ENERGY 6 -- magenta
-		.WORD	127334		; ENERGY 5 -- bright red
-		.WORD	027334		; ENERGY 4 -- red
-		.WORD	117334		; ENERGY 3 -- bright blue
+; No bright/dim (Y-bit) alternation -- too much contrast between adjacent
+; ENERGY steps -- just steps through the 8 hues at full brightness.
+ANTLERTAB:	.WORD	177334		; ENERGY 15 -- white
+		.WORD	177334		; ENERGY 14 -- white
+		.WORD	167334		; ENERGY 13 -- yellow
+		.WORD	167334		; ENERGY 12 -- yellow
+		.WORD	157334		; ENERGY 11 -- cyan
+		.WORD	157334		; ENERGY 10 -- cyan
+		.WORD	147334		; ENERGY 9 -- green
+		.WORD	147334		; ENERGY 8 -- green
+		.WORD	137334		; ENERGY 7 -- magenta
+		.WORD	137334		; ENERGY 6 -- magenta
+		.WORD	127334		; ENERGY 5 -- red
+		.WORD	127334		; ENERGY 4 -- red
+		.WORD	117334		; ENERGY 3 -- blue
 		.WORD	017334		; ENERGY 2 -- blue (critical floor)
-		.WORD	017334		; ENERGY 1 -- blue (critical floor)
+		.WORD	017334		; ENERGY 1 -- blue
 
 ;------------------------------------------------------------------------------
 
