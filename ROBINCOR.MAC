@@ -2728,6 +2728,17 @@ PROJSTEP:
 	RETURN
 
 ;------------------------------------------------------------------------------
+; Robin's energy, ZX $BF6F.  The antler colour it drives ($BF37, decoded
+; this session -- see docs/DisplayList.md's "Palette word format" section)
+; is ROBIN1.MAC's job: STANTLER reads ENERGY itself and pushes the matching
+; ANTLERTAB word to the PPU.  ENERGY never goes below 2 here -- that is ZX's
+; own "critical" floor, where $BE25 diverts to a stagger/death animation
+; instead of decrementing further; that branch isn't ported, so this
+; stand-in just stops decrementing at 2.
+
+ENERGY:		.WORD	17		; ZX default, $0F
+
+;------------------------------------------------------------------------------
 ; Pixel X/Y -> shadow-attribute cell address -- the port of the ZX $DDD6.
 ;   R2 = X (2-pixel units), R3 = Y (pixels).  Returns R0 = the cell address.
 ;   Clobbers R0, R1; preserves R2, R3.

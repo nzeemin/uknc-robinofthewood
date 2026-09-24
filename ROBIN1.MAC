@@ -283,14 +283,15 @@ PPSTA:
 ; see the comment above ANTPAL/HUDPAL/SRCPAL for what this is doing
 	MOV	@#SRCPAL, @#ANTPAL
 	MOV	@#<SRCPAL+2>, @#<ANTPAL+2>
-	MOV	#<ANTPAL+6>, @#004016	; line 210 -> 4-word palette tag at ANTPAL
+	MOV	#<ANTPAL+6>, @#004076	; line 222 -> 4-word palette tag at ANTPAL
 	MOV	@#SRCPAL, @#HUDPAL
 	MOV	@#<SRCPAL+2>, @#<HUDPAL+2>
-	MOV	#<HUDPAL+6>, @#004116	; line 226 -> 4-word palette tag at HUDPAL
+	MOV	#<HUDPAL+6>, @#004176	; line 237 -> 4-word palette tag at HUDPAL
 PDONE:
 	MTPS	#0
 	MOV	#<PPUCOM/2>, @#177010	; ackn of command execution
 	CLR	@#177014
+;
 ; Main loop of the PPU procedure
 PMAIN:	CALL	DRTILS			; draw tiles
 	MOV	#<PPUCOM/2>, @#177010	; get command from CPU
@@ -301,7 +302,10 @@ PMAIN:	CALL	DRTILS			; draw tiles
 	ADD	R0, PC
 	JMP	PMAIN			; 0 - no command
 	JMP	PSOUND			; 1 - play sound
-	;TODO: 2 - bulk blit for room transitions
+	JMP	PMAIN			; 2 - TODO: bulk blit for room transitions;
+					; placeholder so command 3 below lands right
+					; (each table entry must be one 2-word JMP)
+	JMP	PANTLER			; 3 - update the antler energy colour
 ; Exit command
 PEXIT:	MTPS	#200
 ; restore block 0..1000
@@ -465,26 +469,25 @@ PCLSCR:
 ; fold two adjacent plain entries into one 4-word tag occupying the same 8
 ; bytes, and repoint the entry before it.
 ;
-; Splice A -- display-list lines 211+212 (the antler rows) at 004020-004027
-; become one palette tag; line 210's tagB (at 004016) is repointed to it with
-; the size+palette flags (bits 1,2) set.  004024/004026 (yy=211's
-; addressBits/tagB) are left as they were -- yy=211 renders with what was
-; yy=212's pixel row, a one-scanline nudge inside the antler glyph's blank
-; margin, and the chain still lands correctly on the real yy=213 entry.
+; Splice A -- display-list line 222 (the antler rows) becomes one palette tag
+; at ANTPAL (004100-004107); the preceding entry's tagB (at 004076) is
+; repointed to it with the size+palette flags (bits 1,2) set. Confirmed live
+; via the console debugger: poking a single nibble of 004102 (ANTPAL+2)
+; recolours the antlers and nothing else, so this is the right splice point.
 ;
-; Splice B -- lines 227+228 (HUD resume) at 004120-004127, same idea; line
-; 226's tagB is at 004116.
+; Splice B -- line 226 (HUD resume) becomes one palette tag at HUDPAL
+; (004200-004207); the preceding entry's tagB is at 004176.
 ;
 ; Both new palette tags start as a copy of the main screen palette at
 ; 002470/002472, so nothing changes visually until something recolours
-; 004020/004022 (ANTPAL) for the energy display.
+; ANTPAL for the energy display.
 ;
 ; Each splice drops one entry from the 307-entry chain, but the tail of the
 ; list (past ~line 305) is a static self-loop over blank lines -- it just
 ; cycles a couple of times fewer before the frame ends, no visible effect.
 
-ANTPAL	= 004020		; the antler tag's [tag1,tag2] -- recolour these
-HUDPAL	= 004120		; the HUD-resume tag's [tag1,tag2]
+ANTPAL	= 004100		; the antler tag's [tag1,tag2] -- recolour these
+HUDPAL	= 004200		; the HUD-resume tag's [tag1,tag2]
 SRCPAL	= 002470		; source: the main screen palette, copied at init
 
 VSYINT:
@@ -511,6 +514,16 @@ PSOUND:	CALL	TIMRIN
 	MOV	R0, @#304
 	MOV	#^B01000111, @#177710	; allow int, start, timer
 99$:	JMP	PDONE			; return to PPU main loop
+
+; Update the antler energy colour: the CPU stages the target ANTPAL+2 word
+; in PPUDAT (CPU-side memory, so read through the 177010/177014 cross-
+; processor port, same as PMAIN's own command read) then sends command 3.
+; ANTPAL itself is PPU-local memory -- a plain MOV reaches it directly.
+PANTLER:
+	MOV	#<PPUDAT/2>, @#177010	; point the port at the CPU's PPUDAT
+	MOV	@#177014, R0		; read the staged word through it
+	MOV	R0, @#<ANTPAL+2>
+	JMP	PDONE			; acknowledge + return to PPU main loop
 
 ; sound timer interrupt (LO)
 SNINTL:	MOV	R0, -(SP)
@@ -609,6 +622,7 @@ STPAL:	MOV	@#PALNO, R0
 	ADD	#PALETT, R0
 STPAL1:	MOV	R0, @#PPBACP
 ;	BR	PPSEND
+
 ; Procedure used to send parameters block for PPU using Channel 2
 PPSEND:	MOV	#PPBADR, R0
 	MOV	#5, R1
@@ -620,6 +634,41 @@ PPSEND:	MOV	#PPBADR, R0
 	SOB	R1, 2$
 	MTPS	#0
 	RETURN
+
+; Push the antler colour matching ENERGY (ROBINCOR.MAC) to ANTPAL+2.  No
+; parameters -- reads ENERGY itself and looks up ANTLERTAB.  PPBLCK/PPSEND
+; (channel 2) only works before RUNPPU hands the PPU over to our own PMAIN
+; loop -- once that loop is running, the PPU stops listening to channel 2 --
+; so this instead stages the word in PPUDAT and sends command 3, which
+; PANTLER (PPSTA's PMAIN dispatch, above) picks up and writes into its own
+; local ANTPAL+2.  Utilizes R0, R1.
+STANTLER:
+	MOV	#15., R0		; ANTLERTAB is declared high-to-low (ENERGY 15
+	SUB	ENERGY, R0		; first), so the index counts down from there
+	ASL	R0			; word index into ANTLERTAB
+	ADD	#ANTLERTAB, R0
+	MOV	(R0), PPUDAT
+	PPUCMW	#3
+	RETURN
+; ANTPAL+2 word per ENERGY value 2-15 (index = ENERGY-2), decoded this
+; session -- see docs/DisplayList.md's "Palette word format" section.  The
+; low 12 bits of every entry are SRCPAL's own codes 4-6, untouched since the
+; antler glyph only ever uses code 7 (the top nibble, bits 15-12).
+ANTLERTAB:	.WORD	177334		; ENERGY 15 -- bright white
+		.WORD	077334		; ENERGY 14 -- white
+		.WORD	167334		; ENERGY 13 -- bright yellow
+		.WORD	067334		; ENERGY 12 -- yellow
+		.WORD	157334		; ENERGY 11 -- bright cyan
+		.WORD	057334		; ENERGY 10 -- cyan
+		.WORD	147334		; ENERGY 9 -- bright green
+		.WORD	047334		; ENERGY 8 -- green
+		.WORD	137334		; ENERGY 7 -- bright magenta
+		.WORD	037334		; ENERGY 6 -- magenta
+		.WORD	127334		; ENERGY 5 -- bright red
+		.WORD	027334		; ENERGY 4 -- red
+		.WORD	117334		; ENERGY 3 -- bright blue
+		.WORD	017334		; ENERGY 2 -- blue (critical floor)
+		.WORD	017334		; ENERGY 1 -- blue (critical floor)
 
 ;------------------------------------------------------------------------------
 
