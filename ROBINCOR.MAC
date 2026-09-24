@@ -579,6 +579,11 @@ CLRSHADOW:
 
 ENTERROOM:
 	CLR	ENTPAID			; ZX $DFE6 -- one Ent purchase per visit
+	MOV	#PROJARR, R0		; ZX $C3BF -- clears the arrow and the 3
+	CLR	(R0)+			; guard bullets, all 4 words
+	CLR	(R0)+
+	CLR	(R0)+
+	CLR	(R0)
 	CALL	CLRSHADOW		; $D03F
 	MOV	#LB587, R0		; the left and right screen ornaments ($CDA1)
 	CALL	PRINTSTR
@@ -1017,6 +1022,25 @@ ARROWCOUNT:	.WORD	0
 ENTPAID:	.WORD	0		; ZX $DFE6, cleared on room entry (ENTERROOM)
 ENTBOWCD:	.WORD	0		; ZX $D5A0 -- currently inert, no consumer yet
 ARROWHITS:	.WORD	0		; ZX $D5A5 -- currently inert, no producer yet
+
+; Projectile array, ZX $BF67 -- 4 objects x 2 bytes, object 0 is Robin's
+; arrow, objects 1-3 are the 3 guard bullets.  Data only for now -- no
+; stepper/launcher/draw/hit-test exists yet.
+;
+; Per object: [0] position byte, [1] direction/flags byte.  [0]=0 means the
+; slot is empty.  [1] is packed and reused across the object's lifetime, not
+; a clean field: bit 7 and bit 6 each select a step direction (consumed once
+; per step by the flight code, then cleared); the low bits hold the row,
+; which doubles as an "in-flight" animation-frame check ($0A-$0D) for the
+; arrow-vs-guard hit test; after the direction bits are consumed, bit 6 gets
+; reused as a mid-flight collision flag (set when the draw's XOR finds the
+; pixel already on) and, for the arrow specifically, as the "hit a guard"
+; flag.  Cleared 7 bytes at a time on every room change (ZX $C3BF).
+PROJARR:	.BYTE	0, 0		; object 0 -- Robin's arrow
+		.BYTE	0, 0		; object 1 -- guard bullet
+		.BYTE	0, 0		; object 2 -- guard bullet
+		.BYTE	0, 0		; object 3 -- guard bullet
+		.EVEN
 
 ; Remove up to 3 gold (2) slots from CARRYQ, shifting the rest down and
 ; zero-filling the vacated tail, then redraw the carry row.  Port of
@@ -1852,6 +1876,11 @@ GGROUP:	.WORD	0		; this room's LIVE group base in GSEED, set by
 				; GROUPADRLIVE (GUARDINIT) -- not GROUPADR's
 				; respawn-target index (GUARDROLL)
 
+GFIRESLOT: .WORD	0	; this GUARDSTEP call's guard slot (0-3, from
+				; GSTEPIDX) -- stashed because R2 gets reused by
+				; the route/patrol scan below before Stage 7b
+				; needs it for the bullet-slot pick
+
 ; Fill the whole table with fresh randomness -- the port of $CE0A's guard-seed
 ; loop.  Call once at game start, after RNGINIT.  R3 (not R1) is the loop
 ; counter -- CALL PRNG itself clobbers R1.  Utilizes R0, R3, R4.
@@ -2077,6 +2106,7 @@ GUARDSTEP:
 	INC	R1			; slot number 1-4 (0 is Robin)
 6$:	ADD	#OBJSZ, R5
 	SOB	R1, 6$
+	MOV	R2, GFIRESLOT		; stash before the route/patrol scan reuses R2
 ;
 	CLR	R0
 	BISB	2(R4), R0		; GSEED byte 2 (flags)
@@ -2213,10 +2243,12 @@ GUARDSTEP:
 	CMP	R0, #1
 	BEQ	41$
 	CMP	R0, #2
-	BNE	70$
-	CMP	R1, #16.
-	BHIS	70$
-	ADD	#112., R1
+	BEQ	56$
+	JMP	70$
+56$:	CMP	R1, #16.
+	BLO	57$
+	JMP	70$
+57$:	ADD	#112., R1
 41$:	MOVB	R1, 9.(R5)		; next X
 	MOVB	#80., 10.(R5)		; next Y -- always 80., faithful to ZX
 ;
@@ -2228,32 +2260,119 @@ GUARDSTEP:
 	CLR	R3
 	BISB	2(R4), R3		; flags byte, held across both bit tests below
 	BIT	#20, R3			; bit 4 -- already dead/away
-	BNE	60$			; leave the frame list, just redraw
+	BEQ	58$
+	JMP	60$			; leave the frame list, just redraw
+58$:
 	BIT	#40, R3			; bit 5 -- just hit (set by a future sword/
 	BEQ	42$			; arrow hit-test, not ported yet -- inert
 					; for now, wired for when it lands)
 	BICB	#40, 2(R4)		; promote hit -> persistent dead
 	BISB	#20, 2(R4)
 	MOV	#LAC7B, 2(R5)		; death sequence, full play from the top
-	BR	60$
+	JMP	60$
 ;
 ; port of $AB50-$AB53: bits 6-7 EQUAL (00 or 11) means ZX skips this reset
-; entirely and goes to the proximity/shoot-claim check at $AB6A -- shooting
-; is out of scope (see the header note), so this port's stand-in is to just
-; skip straight to the redraw, leaving the current frame-list/cursor alone.
+; entirely and goes straight to the proximity/shoot-claim check at $AB6A --
+; this port's Stage 7b below does the same, via the shared 44$ entry.
 42$:	MOV	R3, R0
 	BIC	#^C300, R0		; isolate bits 6-7
-	BEQ	60$			; 00 -- equal, skip the reset below
+	BEQ	44$			; 00 -- equal, skip the reset below
 	CMP	R0, #300
-	BEQ	60$			; 11 -- equal, skip the reset below
+	BEQ	44$			; 11 -- equal, skip the reset below
 	BIT	#200, R3		; bit 7 -- which walk cycle this guard joins
 	BEQ	43$
 	MOV	#LAC67, 2(R5)
 	BISB	#100, 2(R4)		; sync bit 6 to match bit 7 (both set)
-	BR	60$
+	BR	44$
 43$:	MOV	#LAC6B, 2(R5)
 	BICB	#100, 2(R4)		; sync bit 6 to match bit 7 (both clear)
-	BR	60$
+;
+; Stage 7b, port of $AB6A-$ABE0 -- guard fires a bullet.  Runs every call,
+; same as ZX's fallthrough from $AB53/$AB64 into $AB6A regardless of which
+; branch above was taken.  R3 still holds the flags byte (bit 7 = facing)
+; read at the top of Stage 7a.  Reaching 9$ with no shot fired just falls
+; into 60$ below and redraws the guard's current (walk/turn) frame list, same
+; as the no-shot ZX path; a fired shot instead falls in with the kneel/aim
+; list already switched in, so 60$'s generic redraw covers both cases.
+44$:	MOV	#ROBIN, R0
+	CLR	R1
+	BISB	6(R0), R1		; Robin's X, 2-pixel units
+	CLR	R0
+	BISB	9.(R5), R0		; guard's X, 2-pixel units
+	SUB	R0, R1			; R1 = RobinX - guardX, signed
+	MOV	R1, R0			; keep the sign for the facing test below
+	BGE	45$
+	NEG	R0
+45$:	CMP	R0, #48.		; ZX's $30 range gate (2-pixel units, same
+	BLT	60$			; scale as both operands) -- too close, no shot
+;
+	BIT	#200, R3		; facing right needs RobinX >= guardX (R1>=0);
+	BEQ	46$			; facing left needs RobinX <= guardX (R1<=0)
+	TST	R1
+	BLT	60$
+	BR	47$
+46$:	TST	R1
+	BGT	60$
+;
+47$:	TST	BOWFLAG			; arrow mode: no coin-flip, always eligible
+	BNE	50$
+	CALL	PRNG
+	BIC	#^C1, R0
+	BEQ	60$			; ~1-in-2 chance, matches ZX's LD A,R/AND 1
+;
+50$:	MOV	GFIRESLOT, R0		; guard 0 -> bullet object 1, guard 1 ->
+	BEQ	51$			; object 2, guards 2/3 share object 3 (matches
+	CMP	R0, #1			; ZX's counter-parity fold -- contention is
+	BEQ	52$			; intentional, not a bug)
+	MOV	#<PROJARR+6>, R1
+	BR	53$
+51$:	MOV	#<PROJARR+2>, R1
+	BR	53$
+52$:	MOV	#<PROJARR+4>, R1
+53$:	TSTB	(R1)			; slot already occupied -- give up this frame,
+	BNE	60$			; this IS the cooldown, no separate timer
+;
+	CLR	R2
+	BISB	9.(R5), R2		; guard column, matches ZX's SRL SRL of (IX+9)
+	ASR	R2
+	ASR	R2
+	BIC	#^C37, R2		; on the 32.-byte shadow line -- guard X can wrap
+					; past PLAYW (patrol cursor's +112 range); stored
+					; unmasked, PROJSTEP's TOGGLECELL calls would
+					; write past the row into adjacent memory
+	CMP	R2, #2.			; same playable-column bounds as PROJSTEP's own
+	BLT	60$			; edge kill -- a guard standing right at the
+	CMP	R2, #30.		; edge would otherwise spawn a bullet that dies
+	BGE	60$			; in 0-1 steps, never visibly flying
+	MOVB	R2, (R1)
+	MOVB	#GPROJROW, 1(R1)	; fixed guard's projectile row
+	BIT	#200, R3		; guard's own facing bit
+	BEQ	54$
+	BICB	#200, 1(R1)		; facing right -> bullet bit7 clear: same real
+	MOV	#LAC6F, 2(R5)		; direction, opposite polarity; aim frame LAC6F
+	BR	55$
+54$:	BISB	#200, 1(R1)		; facing left -> bullet bit7 set; aim LAC75
+	MOV	#LAC75, 2(R5)
+55$:
+; Draw the guard's own kneel/aim frame first (CALL, not 60$'s tail JMP), then
+; the bullet -- PROJDRAW after would otherwise land on the same shadow bytes
+; OBJSTEP's own XOR just touched and cancel it back off in this same frame.
+; The bullet's Y is NOT the guard's own sprite Y (10.(R5), fixed at 80. for
+; every guard) -- it is 2 cell-rows below that, matching ZX's own $ABB0-$ABB9
+; bias.  Both inputs are fixed (guard Y never varies), so this is a fixed
+; 96. (14. cell rows * 8.) rather than a per-call computation.
+	MOV	#96., R3
+	MOV	R3, -(SP)		; stash across the OBJSTEP call below
+	BISB	#4, 4(R5)		; port of $ABE3 -- arm step only
+	MOV	#L8DC4, R1
+	MOV	R5, R4
+	MOV	R5, -(SP)		; OBJSTEP clobbers R5 (its own frame-list
+	CALL	OBJSTEP			; cursor scratch) -- save/restore across it
+	MOV	(SP)+, R5
+	CLR	R2
+	BISB	9.(R5), R2		; the bullet's own draw, at the guard's resolved
+	MOV	(SP)+, R3		; column; Y is the stashed cell-row*8 from above
+	JMP	PROJDRAW		; (2-pixel units), R3=Y (pixels)
 ;
 ; Not-drawn tail, port of $ABF0 -- skips stages 7a/7b; the animation still
 ; advances (OBJSTEP's own hold-counter/cursor-walk), the list is set straight
@@ -2422,6 +2541,7 @@ GAMELOOP:
 	CALL	OBJPICKUP		; erase any pickup Robin is standing on
 	CALL	ENTCHECK		; the Ent's weapon-purchase transaction
 	CALL	GUARDSTEP		; one guard's movement/animation this frame
+	CALL	PROJSTEP		; step + redraw all 4 bullet slots (ZX $BF8A)
 20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;
@@ -2514,6 +2634,98 @@ OBJSTEP:
 	CALL	DRAWFRAME
 	MOV	(SP)+, R4
 90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Draw (XOR-toggle) one projectile's 8x1 pixel bar and mark its cell dirty --
+; the port of $BD2A's shadow-pixel half (the attribute half is skipped: no
+; SHADOWATR write here, so DRAWCELL's ramp-colour fallback via DIRTYCELLS
+; supplies the colour, same as any other sprite).  A thin X/Y-unit wrapper
+; around TOGGLECELL below, used only at bullet launch (GUARDSTEP Stage 7b),
+; which still has the guard's position in OBJTAB's own X/Y units.
+;   R2 = X (2-pixel units), R3 = Y (pixels).
+; Clobbers R0, R1, R2, R4.
+
+PROJDRAW:
+	MOV	R2, R0
+	ASR	R0
+	ASR	R0			; X >> 2 = cell column
+	BIC	#^C37, R0		; on the 32.-byte shadow line -- guard X can
+					; wrap past PLAYW (patrol cursor's +112 range),
+					; matches DRAWFRAME's own masking
+	MOV	R3, R1
+	ASR	R1
+	ASR	R1
+	ASR	R1			; Y >> 3 = cell row
+					; falls straight into TOGGLECELL, right below
+;
+; The shared XOR-toggle + dirty-mark, taking cell units directly -- PROJSTEP
+; below stores PROJARR's column already in cell units (ZX's own SRL SRL
+; scale, ported unchanged), so it calls this directly rather than going
+; through PROJDRAW's extra /4.
+;   R0 = cell column (0-31., already masked), R1 = cell row.
+; Clobbers R1, R2, R4.
+
+TOGGLECELL:
+	SWAB	R1			; row * 256.
+	MOV	R1, R2
+	ADD	R0, R2			; + column
+	ADD	#SHADOWPIX, R2		; now R2 = address in SHADOWPIX
+	MOVB	(R2), R4
+	MOV	#377, R3
+	XOR	R3, R4
+	MOVB	R4, (R2)
+; Mark the cell yellow on black -- port of $BD2A's $E500 write of $46
+	ASH	#-3., R1		; row * 32.
+	ADD	R0, R1			; + column
+	MOVB	#6, DIRTYCELLS(R1)	; put the yellow color
+	RETURN
+
+;------------------------------------------------------------------------------
+; Step all 4 PROJARR objects one segment (horizontal only -- the row never
+; changes, matching ZX's own $BCC2/$BD2A behaviour once its self-modified
+; skip-erase/hit-kill flags are factored out; see the header note above
+; PROJARR).  Port of $BCC2, called once per frame from GAMELOOP, not per
+; guard turn like GUARDSTEP.  Object 0 (Robin's arrow) is always empty for
+; now and is skipped like any other inactive slot.
+;
+; No skip-first-erase flag is needed here (unlike ZX): bullet creation
+; already draws once (GUARDSTEP Stage 7b's PROJDRAW call), so this routine's
+; first erase pass on the following frame un-draws exactly that, in balance.
+; No hit-kill flag either -- nothing sets one yet, since no hit-test exists.
+; Utilizes R0-R5.
+
+GPROJROW = 12.		; Guards' projectile row
+
+PROJSTEP:
+	MOV	#PROJARR, R5
+10$:	MOVB	(R5), R0		; get column 0..31, 0 = empty slot
+	BEQ	90$			; => skip empty
+;
+	MOV	#GPROJROW, R1		; row is always fixed (see PROJARR's header)
+	CALL	TOGGLECELL		; erase at the current position
+;
+	MOVB	(R5), R0		; get column 0..31
+	BITB	#200, 1(R5)		; direction (bit 7) = right?
+	BEQ	20$
+	DEC	R0			; left
+	BR	30$
+20$:	INC	R0
+30$:	CMP	R0, #2.
+	BLT	40$			; off the left edge -- kill, no redraw
+	CMP	R0, #30.
+	BLT	50$			; still on screen
+; Kill the arrow
+40$:	CLR	(R5)+
+	BR	95$
+; Still on the screen - redraw
+50$:	MOVB	R0, (R5)		; save new column
+	MOV	#GPROJROW, R1
+	CALL	TOGGLECELL		; draw at the new position
+;
+90$:	TST	(R5)+			; next object -- TOGGLECELL clobbers R4, so the
+95$:	CMP	R5, #<PROJARR+8.>	; loop bound is a plain address compare, not
+	BLT	10$			; SOB's own counter register
+	RETURN
 
 ;------------------------------------------------------------------------------
 ; Pixel X/Y -> shadow-attribute cell address -- the port of the ZX $DDD6.
@@ -2889,8 +3101,9 @@ LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
 ; (8 distinct), $08-$0B walk left with shield (4 distinct, played twice),
 ; $0C front (the turn lead-in frame), $0D/$0E fire right/left.  LAC51/LAC5C
 ; are the plain walk cycles (GUARDINIT, GUARDSTEP's not-drawn tail); LAC67/
-; LAC6B are turn lead-ins (GUARDSTEP Stage 7a); LAC6F/LAC75 (aim) are unused
-; until shooting is ported; LAC7B/LAC7F are wired to the hit/dead path.
+; LAC6B are turn lead-ins (GUARDSTEP Stage 7a); LAC6F/LAC75 (aim) are wired to
+; GUARDSTEP Stage 7b's bullet launch; LAC7B/LAC7F are wired to the hit/dead
+; path.
 
 LAC51:	.BYTE	013, 012, 011, 010, 013, 012, 011, 010, 377	; backward walk
 	.BYTE	<LAC51&377>, <LAC51/400>
