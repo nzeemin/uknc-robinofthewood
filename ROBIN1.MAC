@@ -68,7 +68,9 @@ START::
 	CALL	PRINT
 	CALL	PAUSE			; wait while screen updates
 ;
-	JMP	GAMEMAIN		; => title picture and Menu
+	CALL	RUNPPU			; start the PPU renderer
+	CALL	CPUVSY			; start the vsync frame counter
+	JMP	MAINMENU		; => title picture and Menu
 ;
 OSTACK:	.WORD	01000			; Saved initial SP
 ;
@@ -296,18 +298,18 @@ PDONE:
 PMAIN:	CALL	DRTILS			; draw tiles
 	MOV	#<PPUCOM/2>, @#177010	; get command from CPU
 	MOV	@#177014, R0
-	BMI	PEXIT			; exit PPU command
+	BMI	PEXITCMD		; exit PPU command
 	ASL	R0
 	ASL	R0
 	ADD	R0, PC
 	JMP	PMAIN			; 0 - no command
-	JMP	PSOUND			; 1 - play sound
-	JMP	PMAIN			; 2 - TODO: bulk blit for room transitions;
-					; placeholder so command 3 below lands right
-					; (each table entry must be one 2-word JMP)
-	JMP	PANTLER			; 3 - update the antler energy colour
+	JMP	PCLSCRCMD		; 1 - clear screen
+	JMP	PMAIN			; 2 - TODO: bulk blit for room transitions
+	JMP	PANTLERCMD		; 3 - update the antler energy colour
+
 ; Exit command
-PEXIT:	MTPS	#200
+PEXITCMD:
+	MTPS	#200
 ; restore block 0..1000
 	MOV	PC, R0
 	ADD	#BKP-., R0
@@ -323,6 +325,13 @@ PEXIT:	MTPS	#200
 	CLR	@#177014
 	MTPS	#0
 	RETURN
+
+; Clear the real screen (command 1) -- just PCLSCR, already used at PPU
+; init/exit, now also reachable from the CPU side for the menu/GAME OVER
+; transition (MAINMENU, ROBINCOR.MAC).
+PCLSCRCMD:
+	CALL	PCLSCR
+	JMP	PDONE			; acknowledge + return to PPU main loop
 
 ; Keyboard interrupt handler
 KEYINT:	MOV	@#177010, -(SP)
@@ -519,7 +528,7 @@ PSOUND:	CALL	TIMRIN
 ; in PPUDAT (CPU-side memory, so read through the 177010/177014 cross-
 ; processor port, same as PMAIN's own command read) then sends command 3.
 ; ANTPAL itself is PPU-local memory -- a plain MOV reaches it directly.
-PANTLER:
+PANTLERCMD:
 	MOV	#<PPUDAT/2>, @#177010	; point the port at the CPU's PPUDAT
 	MOV	@#177014, R0		; read the staged word through it
 	MOV	R0, @#<ANTPAL+2>
@@ -640,7 +649,7 @@ PPSEND:	MOV	#PPBADR, R0
 ; (channel 2) only works before RUNPPU hands the PPU over to our own PMAIN
 ; loop -- once that loop is running, the PPU stops listening to channel 2 --
 ; so this instead stages the word in PPUDAT and sends command 3, which
-; PANTLER (PPSTA's PMAIN dispatch, above) picks up and writes into its own
+; PANTLERCMD (PPSTA's PMAIN dispatch, above) picks up and writes into its own
 ; local ANTPAL+2.  Utilizes R0, R1.
 STANTLER:
 	MOV	#15., R0		; ANTLERTAB is declared high-to-low (ENERGY 15

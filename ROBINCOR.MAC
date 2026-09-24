@@ -4,7 +4,7 @@
 ;------------------------------------------------------------------------------
 
 ; !!DEBUG!! uncomment + set to pin GAMEMAIN's starting room
-;DBGINITROOM = ^X027
+DBGINITROOM = ^X027
 
 ; !!DEBUG!! 1 = show CURROOM as 3 hex digits, bottom-right of the HUD
 DBGSHOWROOM = 1
@@ -988,15 +988,23 @@ LIVEBUF:	.BYTE	060, 0, 6, 0	; one-glyph PRINTAT string: digit
 					; ZX original), terminator
 WREATHPICKUP:
 	CMP	LIVES, #9.
-	BGE	5$
+	BGE	DRAWLIVES
 	INC	LIVES
-5$:	MOV	#LB51F+2, R0		; archer icon, its own 2-byte position header
+;
+; Redraw the icon+count from the current LIVES -- also called directly
+; (ROBACTSTEP) after the critical-hit stagger's own -2 penalty, which
+; doesn't go through the pickup path above.
+DRAWLIVES:
+	MOV	#LB51F+2, R0		; archer icon, its own 2-byte position header
 	MOV	#7., R1			; skipped.  ZX $B51F's own position bytes
 	MOV	#<HUDROW0+2.>, R2	; ($1C,$B0) decode to column 7., row 22.
 	CALL	PRINTAT
 ;
 	MOV	LIVES, R0
-	CALL	HEXDIG			; R0 := ASCII digit (LIVES fits one nibble)
+	BGE	1$			; clamp the DISPLAYED digit at 0 -- LIVES
+	CLR	R0			; itself stays negative (the stagger's -2
+1$:	CALL	HEXDIG			; penalty going through 0) for GAMEOVER's own
+					; check; R0 := ASCII digit (fits one nibble)
 	MOVB	R0, LIVEBUF
 	MOV	#LIVEBUF, R0		; ZX $DA09's own position bytes ($24,$B8)
 	MOV	#9., R1			; decode to column 9., row 23. -- one row
@@ -2456,12 +2464,36 @@ DBGROOMDRAW:
   .ENDC
 
 ;------------------------------------------------------------------------------
-; Game entry point, called from START in ROBIN1.MAC.
+; Stub title/menu screen, called from START in ROBIN1.MAC (after RUNPPU/
+; CPUVSY, which START starts directly).  No real menu/options yet, just
+; "PRESS ANY KEY" (ROBININD.MAC, port-only, no ZX equivalent) on an
+; otherwise blank screen, then block on FIRE -- a stand-in for "any key"
+; since PPUKEY only tracks the game's own key bits.
+
+MAINMENU:
+	PPUCMW	#1			; clear the real screen (PPU command 1,
+					; ROBIN1.MAC) -- whatever was on screen
+					; (a room, GAME OVER's message) doesn't
+					; linger behind/around the menu text
+5$:	MOV	@#PPUKEY, R0		; wait for the key that got us here (a fresh
+	BIT	#PKEYFR, R0		; boot has none held, but GAME OVER's own
+	BNE	5$			; dismiss-key is still down at this point) to
+					; release, so the check below doesn't fire
+					; on that same press and skip the menu
+	CALL	RNGINIT			; reseed the PRNG from the live frame counter
+;
+	MOV	#MPRESSKEY, R0		; "PRESS ANY KEY"
+	CALL	PRINTSTR
+	CALL	DRAWALL
+8$:	MOV	@#PPUKEY, R0
+	BIT	#PKEYFR, R0
+	BEQ	8$
+	;TODO: real title picture and menu, options
+;
+;------------------------------------------------------------------------------
+; New-game entry point, falls straight in from MAINMENU above.
 
 GAMEMAIN:
-	CALL	RUNPPU			; start the PPU renderer
-	CALL	CPUVSY			; start the vsync frame counter
-	CALL	RNGINIT			; reseed the PRNG from the live frame counter
 	CALL	GSEEDINIT		; fill the guard seed table (ZX $CE0A)
 ;
 	MOV	#CARRYQ, R4		; new game: empty the carry queue and every
@@ -2478,6 +2510,11 @@ GAMEMAIN:
 	CLR	ENTBOWCD
 	CLR	ARROWHITS
 	CLR	GSTEPIDX
+	CLR	ROBACT			; new game: not staggering
+	MOV	#17, ENERGY		; ZX default ($0F) -- not reset elsewhere, so a
+					; second playthrough (after GAME OVER) would
+					; otherwise start with whatever energy the
+					; last one ended on
 ;
   .IF NE DBGGOLDMAX
 	MOV	#8., R0			; fill every carry slot with gold, no shift
@@ -2505,7 +2542,6 @@ GAMEMAIN:
 	CALL	DBGROOMDRAW		; room number, top-right of the play area
   .ENDC
 ;
-	;TODO: title picture and menu
 	;TODO: new game init
 ;
 	MOV	#ROBIN, R4		; wipe the record, then drop Robin at a fixed cell
@@ -2543,6 +2579,7 @@ GAMELOOP:
 	CALL	GUARDSTEP		; one guard's movement/animation this frame
 	CALL	PROJSTEP		; step + redraw all 4 arrow slots (ZX $BF8A)
 	CALL	ARROWHIT		; hurt Robin on a guard's-arrow hit (ZX $BDA3)
+	CALL	ROBACTSTEP		; advance the critical-hit stagger, if any
 20$:
 	CALL	DRAWALL			; flush changed cells to the screen
 ;
@@ -2742,10 +2779,9 @@ ENERGY:		.WORD	17		; ZX default, $0F
 ;------------------------------------------------------------------------------
 ; Check Robin against the 3 guard's arrows -- port of $BDA3, called once per
 ; frame from GAMELOOP.  Object 0 (Robin's own arrow) is skipped; only
-; objects 1-3 (the guard's arrows) can hurt him.  No idle gate (ZX's $CC7B
-; check) -- nothing in this port sets an equivalent "busy" state yet, so
-; there is nothing for it to protect against; see the readiness discussion
-; before this feature was implemented.
+; objects 1-3 (the guard's arrows) can hurt him.  Idle gate, ZX's $CC7B
+; check: skips entirely while ROBACT is non-zero, so Robin can't be hit
+; again (double-triggering the stagger) while already staggering.
 ;
 ; ZX's test: (column+2)*4 - RobinX within an 8-unit band, row*8 - RobinY
 ; within a 24-unit band, both in the same 2-pixel-unit/pixel scale as
@@ -2755,10 +2791,13 @@ ENERGY:		.WORD	17		; ZX default, $0F
 ;
 ; On a hit: clears the arrow immediately (not ZX's one-frame-delayed
 ; destroy-via-bit-6 -- a deliberate simplification, our PROJARR layout
-; doesn't carry that flag) and decrements ENERGY (floor 2, no stagger/death
-; branch, same stand-in ENERGY's own header describes).  Utilizes R0-R5.
+; doesn't carry that flag).  Above the critical floor, decrements ENERGY
+; and recolours the antlers.  At the critical floor, triggers the stagger
+; (ZX $BE25/$CB9D) instead -- see ROBACTSTEP below.  Utilizes R0-R5.
 
 ARROWHIT:
+	TST	ROBACT			; already staggering -- invulnerable, ZX's
+	BNE	99$			; own idle-gate behaviour
 	MOV	#<PROJARR+2>, R5	; objects 1-3 -- skip object 0 (Robin's arrow)
 10$:	CLR	R0
 	BISB	(R5), R0		; column, 0 = empty slot
@@ -2792,14 +2831,110 @@ ARROWHIT:
 	CLR	(R5)			; hit -- clear the arrow (word clear is
 					; fine, column 0 alone marks it empty)
 	CMP	ENERGY, #2
-	BLE	90$			; already at the critical floor
-	DEC	ENERGY
+	BGT	20$			; above the critical floor -- plain damage
+	MOV	#ROBACRIT, ROBACT	; at the floor -- trigger the stagger instead;
+	RETURN				; ROBACTSTEP does the rest, and the idle gate
+					; above stops any further hit this frame
+20$:	DEC	ENERGY
 	CALL	STANTLER		; ROBIN1.MAC -- reads ENERGY, pushes colour
 ;
 90$:	ADD	#2, R5			; next object
 	CMP	R5, #<PROJARR+8.>
 	BLT	10$
-	RETURN
+99$:	RETURN
+
+;------------------------------------------------------------------------------
+; Advance the critical-hit stagger by one frame -- port of ZX $BE25's $6E
+; branch plus $CB9D/$CBC7/$CBD6/$C055, called unconditionally once per frame
+; from GAMELOOP.  No-ops immediately unless ROBACT is set (by ARROWHIT).
+;
+; ROBACT does double duty exactly like ZX's $CC7B: first call after being
+; set to ROBACRIT is the one-shot transition (ZX $CB9D) -- lives penalty,
+; pick the stagger state/frame-list by facing -- identified by ROBST not
+; being 8/9 yet (the setup itself is what sets it, so this can only be true
+; once).  ZX identifies the same "first call" by CC7B still reading exactly
+; $6E, but ZX's version falls through into the SAME-frame decrement below
+; right after the state change (via $CB9D -> $CBF7 -> $CA30's dispatch,
+; landing straight on $CBC7/$CBD6) -- this does too, deliberately, rather
+; than RETURNing after setup: without that fallthrough ROBACT would never
+; change on the first call, and every later call would misread it as still
+; being the first one, an infinite loop.  Every call after that is the real
+; countdown (ZX $CBC7/$CBD6), which at the fixed checkpoint ROBACHECK (ZX
+; $C055's own $3C) checks whether the lives penalty went negative and cuts
+; to GAME OVER if so, pre-empting the natural recovery at 0 -- otherwise
+; just keeps counting.  Utilizes R0-R2, R4.
+
+ROBACTSTEP:
+	TST	ROBACT
+	BEQ	99$			; not staggering
+	CMPB	ROBST, #8.
+	BEQ	20$			; already staggering -- countdown path
+	CMPB	ROBST, #9.
+	BEQ	20$
+;
+	SUB	#2, LIVES		; extra-life penalty; PDP-11 signed underflow
+					; wraps the same way ZX's unguarded SUB does
+	CALL	DRAWLIVES		; redraw the HUD count -- matches ZX's own
+					; $CBAA, called unconditionally here too,
+					; even if this just went negative (briefly
+					; shows a garbage digit until GAME OVER
+					; cuts in at the checkpoint below)
+	MOV	#ROBIN, R4
+	BITB	#200, 1(R4)		; current facing (bit7: clear=right, set=left)
+	BEQ	10$
+	MOV	#9., R1
+	MOV	#LSTAGL, R2
+	BR	11$
+10$:	MOV	#8., R1
+	MOV	#LSTAGR, R2
+11$:	MOVB	R1, ROBST
+	MOV	R2, 2(R4)		; frame-list cursor, same as COMMIT
+;
+20$:	DEC	ROBACT
+	CMP	ROBACT, #ROBACHECK
+	BNE	30$
+	TST	LIVES
+	BLT	GAMEOVER		; negative -- pre-empts the recovery below
+;
+30$:	TST	ROBACT
+	BNE	99$			; still counting down
+	MOV	#17, ENERGY		; recovered -- refill (ZX default, $0F)
+;
+; Back to a normal sit state, same as TOSITF/COMMIT -- ROBST must leave 8/9
+; before MOVEROBIN's gate reopens next frame, or ROBSTATE indexes RSDISP
+; (only 8 entries, states 0-7) past its end and JMPs into garbage.
+	MOV	#ROBIN, R4
+	BITB	#200, 1(R4)		; current facing (bit7: clear=right, set=left)
+	BEQ	40$
+	MOVB	#1, ROBST
+	MOV	#LSITL, 2(R4)
+	BR	50$
+40$:	CLRB	ROBST
+	MOV	#LSITR, 2(R4)
+50$:	JMP	STANTLER		; ROBIN1.MAC -- push the full-energy colour
+99$:	RETURN
+
+;------------------------------------------------------------------------------
+; GAME OVER -- print the message (ROBININD.MAC's LB663, already ported but
+; unused until now), wait for a key (same FIRE stand-in as MAINMENU), then
+; back to the menu.  ZX has no in-game resurrect/respawn -- this always
+; means a hard reset, never called mid-play.
+
+GAMEOVER:
+	CLR	ROBACT			; leave the stagger cleanly before the menu
+	CALL	DRAWALL			; flush this frame's own pending redraws (e.g.
+					; a guard GUARDSTEP already marked dirty but
+					; hasn't published yet) first, so the message
+					; below always publishes last and wins any
+					; overlap instead of a guard punching a hole
+					; back through its black background rows
+	MOV	#LB663, R0		; ROBININD.MAC -- "GAME OVER" message
+	CALL	PRINTSTR
+	CALL	DRAWALL
+8$:	MOV	@#PPUKEY, R0
+	BIT	#PKEYFR, R0
+	BEQ	8$
+	JMP	MAINMENU
 
 ;------------------------------------------------------------------------------
 ; Pixel X/Y -> shadow-attribute cell address -- the port of the ZX $DDD6.
@@ -2909,6 +3044,8 @@ FIREHELD:	.WORD	0		; this frame's fire bit, kept out of the
 
 MOVEROBIN:
 	MOV	#ROBIN, R4
+	TST	ROBACT			; staggering (ZX $CC7B non-zero)? skip input/
+	BNE	STAGTAIL		; movement/state entirely, just keep animating
 	CALL	READINPUT		; R0 = key mask, opposite pairs cancelled
 	MOV	R0, R2
 	BIC	#^C<PKEYFR>, R2
@@ -2985,6 +3122,7 @@ MOVEROBIN:
 	MOV	(SP)+, R0		; direction mask
 	CALL	ROBSTATE		; -> ROBST, cursor at 2/3, facing bit 7 of off. 1
 ;
+STAGTAIL:
 	BISB	#5, 4(R4)		; active + step requested
 	MOV	#L8D80, R1
 	JMP	OBJSTEP
@@ -3000,10 +3138,26 @@ MOVEROBIN:
 ; "Stay" leaves the cursor running so the current list keeps animating.
 
 ROBST:		.BYTE	0		; 0 SIT R  1 SIT L  2 RUN R  3 RUN L  4 RUN U  5 RUN D
-					; 6 STICK R  7 STICK L (own numbering, not ZX's $0A/$0B)
+					; 6 STICK R  7 STICK L  8 STAGGER R  9 STAGGER L
+					; (own numbering, not ZX's $0A/$0B/$0E/$0F)
 	.EVEN
 
 SWINGCNT:	.WORD	0		; stick-swing hold, ZX's $CC7A ($10 on trigger)
+
+; Robin's animation-code register, ZX $CC7B: 0 = normal, ROBST/ROBSTATE (the
+; per-frame state machine above/below) drives him from live input as usual.
+; Nonzero = a special sequence is in progress; MOVEROBIN's own gate (see its
+; top) skips the whole input/movement/state machine while this is set and
+; just lets the already-armed frame-list cursor keep animating through
+; OBJSTEP, same as ZX locks Robin out of normal control whenever $CC7B (or
+; $CC7A) is live.  The only sequence that sets it so far is the critical-hit
+; stagger, ported in ROBACTSTEP below (ZX $BE25/$CB9D/$CBC7/$CBD6/$C055).
+ROBACT:		.WORD	0
+ROBACRIT = 156.		; ZX $6E -- one-shot "just critically hit" sentinel and
+			; the stagger's starting countdown value, both at once
+			; (ZX reuses the same register both ways; see ROBACTSTEP)
+ROBACHECK = 74.		; ZX $3C -- the fixed countdown point $C055 watches to
+			; decide GAME OVER vs a natural recovery at 0
 
 RSDISP:	.WORD	RSSIT, RSSIT, RSRUNR, RSRUNL, RSRUNU, RSRUND, RSSTICK, RSSTICK
 
@@ -3146,6 +3300,15 @@ LSITR:	.BYTE	013, 014			; sit right: lead-in, then hold 014
 LSITR2:	.BYTE	014, 377, <LSITR2&377>, <LSITR2/400>
 LSITL:	.BYTE	213, 214			; sit left (mirrored)
 LSITL2:	.BYTE	214, 377, <LSITL2&377>, <LSITL2/400>
+
+; Critical-hit stagger, ZX $CD34/$CD3B: hold the sit frame 3 beats then drop
+; onto (and hold forever on) LA210's lying-down pose, frame 33.  ROBACTSTEP
+; owns the real timing (ROBACT's countdown) -- this list is purely visual,
+; same relationship LSITR/LSITL have to ordinary sitting.
+LSTAGR:	.BYTE	014, 014, 014
+LSTAGR2:	.BYTE	041, 377, <LSTAGR2&377>, <LSTAGR2/400>
+LSTAGL:	.BYTE	214, 214, 214		; mirrored
+LSTAGL2:	.BYTE	241, 377, <LSTAGL2&377>, <LSTAGL2/400>
 
 ; Stick-swing (pre-sword fire action), ZX $CCDF/$CCEA: 7-step lead-in, then
 ; hold the last frame -- RSSTICK's own SWINGCNT ends the swing, not this

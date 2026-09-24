@@ -290,13 +290,15 @@ LACE1:	.BYTE	105,105,105,105,105,105,105,105	; attributes
 	.BYTE	105,105,000
 LACEC:	.ASCII	/2 KEMPSTON/
 	.BYTE	000
-LACF7:	.BYTE	104,104,104,104,104,104,104,104	; attributes
-	.BYTE	104,104,000
-LAD02:	.ASCII	/3 INTERFACE II/
-	.BYTE	000
-LAD11:	.BYTE	103,103,103,103,103,103,103,103	; attributes
-	.BYTE	103,103,103,103,103,103,000
-LAD20:	.ASCII	/4 CURSOR/
-	.BYTE	000
-LAD29:	.BYTE	102,102,102,102,102,102,102,102	; attributes
 
+; "PRESS ANY KEY" -- port-only addition, no ZX equivalent.  Stub title/menu
+; screen for this port (GAMEMAIN, ROBINCOR.MAC); real menu art/options not
+; done yet.  PRINTSTR format: position header (column*4, row*8 -- character
+; column 10., row 10.), glyph stream, 000, empty attribute stream (falls
+; back to PRTATTR).
+MPRESSKEY:
+	.BYTE	50, 120			; column 10., row 10. (octal 50=40., 120=80.)
+	.ASCII	/PRESS ANY KEY/
+	.BYTE	000
+	.BYTE	000			; empty attribute stream
+	.EVEN
