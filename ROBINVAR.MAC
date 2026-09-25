@@ -1,0 +1,89 @@
+;------------------------------------------------------------------------------
+; ROBINVAR.MAC -- variables and non-constant arrays: state that starts as a
+; fixed initial value ported from the ZX original but is written at runtime,
+; unlike ROBINDAT.MAC's data (which is read-only).
+;------------------------------------------------------------------------------
+
+; Guard route table, ZX $DEAB -- 3 entries of 28 bytes, indexed by $AA31's
+; A = (home column - room column + 1) AND $0F: entry 0/1/2 for the guard's
+; home one column left of / on / one column right of the room.  Read by
+; GUARDSTEP's route scan (13$), which only tests zero/non-zero.
+;
+; All-zero on purpose.  In the ZX this region ships holding one-shot startup
+; code (the menu/IM2 init path), which is blanked after it runs and reused as
+; the route buffer; the only thing that ever refills it is a copy from $E982,
+; whose contents are still unknown.  So live it reads as zero, the route scan
+; never finds a step, and direction changes come only from the ~1-in-16
+; facing check (15$).  The static listing's code bytes here are not route
+; data -- using them made guards turn constantly.
+LDEAB:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
+LDEC7:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
+LDEE3:	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0
+	.EVEN
+
+;------------------------------------------------------------------------------
+; World map, ZX $79F9 -- one byte per room, 16. columns x 20. rows.
+;
+; Indexed by the packed room number: room = row * 16. + column, with the row
+; wrapping at 0/19 as $C22F steps between rooms.
+;
+; Bits 0-6 are a descriptor index: $C072 uses it into the room-type table for
+; every room, and additionally into the additional-elements table for rooms
+; $00-$FF (rooms $0100 and above get the base type only).
+; Bit 7 is read twice for two different purposes: $C072 stashes it, and $C2FA
+; reads the same bit directly as a "special room" flag.
+;
+; Not constant: RECOLORCASTLE and other room-state edits write back into this
+; table at runtime (ZX rooms are mutable -- e.g. a killed guard's corpse flag
+; folds into room state elsewhere, and door/scenario state can be patched in
+; over a room's lifetime), so it lives here rather than in ROBINDAT.MAC.
+;------------------------------------------------------------------------------
+
+L79F9:
+	.BYTE	002,201,003,005,205,003,015,002,012,215,012,000,221,203,001,021	; row  0.
+	.BYTE	001,017,002,014,003,013,006,004,213,011,002,215,012,203,017,022	; row  1.
+	.BYTE	004,206,201,007,213,006,204,001,010,202,201,012,204,002,021,023	; row  2.
+	.BYTE	013,000,015,001,207,201,042,237,041,237,042,240,041,042,005,212	; row  3.
+	.BYTE	211,015,005,000,003,014,041,243,245,243,241,241,046,037,003,013	; row  4.
+	.BYTE	001,210,016,001,203,005,245,037,045,377,246,043,246,045,202,005	; row  5.
+	.BYTE	001,002,206,004,003,201,244,043,046,377,245,040,046,245,203,020	; row  6.
+	.BYTE	015,000,002,026,003,217,041,241,043,035,043,237,043,045,202,010	; row  7.
+	.BYTE	211,001,216,030,002,006,245,244,040,046,042,044,237,046,003,014	; row  8.
+	.BYTE	001,213,211,013,002,003,244,037,041,045,040,042,044,246,004,212	; row  9.
+	.BYTE	213,012,213,007,220,002,042,043,044,243,042,037,040,044,002,015	; row 10.
+	.BYTE	224,001,010,216,005,217,231,033,232,034,231,032,031,232,026,022	; row 11.
+	.BYTE	223,203,000,221,003,024,022,030,215,012,210,003,207,015,230,023	; row 12.
+	.BYTE	011,001,025,206,017,023,224,017,205,000,001,014,202,005,220,212	; row 13.
+	.BYTE	013,003,030,015,222,221,223,010,001,220,016,005,000,014,007,214	; row 14.
+	.BYTE	022,226,202,212,022,012,021,003,014,211,023,002,003,007,015,206	; row 15.
+	.BYTE	222,027,014,217,224,002,022,220,212,026,024,026,000,216,211,220	; row 16.
+	.BYTE	212,000,022,006,210,003,222,007,216,030,012,027,220,212,013,024	; row 17.
+	.BYTE	016,000,206,214,200,201,024,003,212,015,014,013,006,203,022,023	; row 18.
+	.BYTE	205,000,004,021,215,203,206,000,016,005,221,212,015,200,012,024	; row 19.
+
+;------------------------------------------------------------------------------
+; Carried-items queue, ZX $D595 -- gold/flower only in this port (quiver
+; goes to its own slot, not the queue, a deliberate deviation).  8 slots,
+; one byte each, 0 = empty.  Written by the blind FIFO push in ROBINCOR.MAC.
+
+CARRYQ:	.BLKB	8.
+
+;------------------------------------------------------------------------------
+; The per-room guard seed table -- the port of the ZX $8A39.  4 room-groups x
+; 4 guard slots x 3 bytes: byte 0 = a "home" value tested against the room's
+; column nibble to decide presence, byte 1 = unused until $DEAB/movement is
+; ported, byte 2 bit 7 = which walk-cycle a present guard starts on.
+;
+; A room's group is bits 4-5 of (room number - 32.), same bucketing $C3FA
+; does -- 4 buckets shared across many rooms, not one entry per room.
+
+GSEED:	.BLKB	4*4*3

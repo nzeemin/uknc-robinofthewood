@@ -1,0 +1,202 @@
+;------------------------------------------------------------------------------
+; ROBINDAT.MAC -- misc small static data tables ported verbatim from the ZX
+; original, that don't fit any other ROBIN*.MAC file's own theme.  Data only
+; -- code that reads it stays in its own logic file (ROBINCOR.MAC, usually).
+;------------------------------------------------------------------------------
+
+; Boar door/seed data, ZX $DD3F -- 48 bytes, 4 groups of 4 x 3-byte entries.
+; $C276 (ZX) picks a group by the room's own map row: with CURROOM packed as
+; row*16+column in this port (unlike ZX's split $C548/$C549 byte pair -- see
+; the disasm session's own trace, confirmed by hand-checking $C22F's room-
+; transition math), rooms only have boars when CURROOM >= 256. (row >= 16.,
+; the bottom 4 of the world map's 20 rows), and the group index is simply
+; (CURROOM>>4)-16. -- ROBROW16/ROBROW17/ROBROW18/ROBROW19 below, one per row.
+;
+; Per 3-byte entry: byte 0/1 are the boar's position seed, read later by the
+; roaming step (not ported yet, see $DBF8) -- spawn itself doesn't resolve a
+; boar's position, same as GUARDINIT leaves guard position to GUARDSTEP's own
+; Stage 6. Byte 2 bit 7 is the initial facing, picking between the mirrored/
+; normal frame list -- same convention GUARDINIT's own 2(R3) facing bit uses.
+
+BOARROW16:	.BYTE	000, 100, 000
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	012, 100, 200
+BOARROW17:	.BYTE	000, 100, 200
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	012, 100, 200
+BOARROW18:	.BYTE	000, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	005, 100, 200
+		.BYTE	012, 100, 200
+BOARROW19:	.BYTE	012, 100, 000
+		.BYTE	000, 100, 200
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 200
+
+;------------------------------------------------------------------------------
+; Ent/Hermit/start-tree room decorations for DRAWSCENARIO (ROBINCOR.MAC, port
+; of ZX $C15E) -- 2x2 block-token arrangements, same DRAWTOKENSAT format as
+; ordinary room scenery.
+
+; Ent's room decoration, ZX $C56A -- a 2x2 arrangement of blocks $1C-$1F,
+; the Ent's tree figure.
+SCENENT:	.BYTE	4
+		.BYTE	012, 034	; $0A,$1C
+		.BYTE	013, 035	; $0B,$1D
+		.BYTE	052, 036	; $2A,$1E
+		.BYTE	053, 037	; $2B,$1F
+
+; Hermit's hut decoration, ZX $C573 -- same layout, blocks $24-$27.
+SCENHERMIT:	.BYTE	4
+		.BYTE	012, 044	; $0A,$24
+		.BYTE	013, 045	; $0B,$25
+		.BYTE	052, 046	; $2A,$26
+		.BYTE	053, 047	; $2B,$27
+
+; Robin's start-room "split tree" decoration, ZX $C57C -- blocks $20-$23,
+; placed nowhere else on the map.
+SCENTREE:	.BYTE	4
+		.BYTE	013, 040	; $0B,$20
+		.BYTE	014, 041	; $0C,$21
+		.BYTE	053, 042	; $2B,$22
+		.BYTE	054, 043	; $2C,$23
+	.EVEN
+
+;------------------------------------------------------------------------------
+; Castle-room list for RECOLORCASTLE (ROBINCOR.MAC, port of ZX $C40E) -- the
+; 26. rooms whose shadow attributes it recolours after a room draw.
+
+LC550:	.BYTE	074,075,112,113,114,115,132,133
+	.BYTE	134,135,152,153,154,155,172,173
+	.BYTE	174,175,212,213,214,215,234,235
+	.BYTE	254,255
+
+;------------------------------------------------------------------------------
+; The game's 4 possible starting rooms, port of ZX's $D39A (rolled once at
+; game start by $CF71's third roll, picking Robin's actual $C548).
+
+STARTROOMS:
+	.WORD	210., 257., 283., 156.
+
+;------------------------------------------------------------------------------
+; Robin animation frame lists -- port of the ZX $CD0B..$CD40 region.  Each is a
+; run of frame numbers (bit 7 = mirrored) ended by 377, then a 2-byte loop
+; target (low byte, high byte) the OBJSTEP walker jumps to.  Lists tail-share.
+
+LSITR:	.BYTE	013, 014			; sit right: lead-in, then hold 014
+LSITR2:	.BYTE	014, 377, <LSITR2&377>, <LSITR2/400>
+LSITL:	.BYTE	213, 214			; sit left (mirrored)
+LSITL2:	.BYTE	214, 377, <LSITL2&377>, <LSITL2/400>
+
+; Critical-hit stagger, ZX $CD34/$CD3B: hold the sit frame 3 beats then drop
+; onto (and hold forever on) LA210's lying-down pose, frame 33.  ROBACTSTEP
+; owns the real timing (ROBACT's countdown) -- this list is purely visual,
+; same relationship LSITR/LSITL have to ordinary sitting.
+LSTAGR:	.BYTE	014, 014, 014
+LSTAGR2:	.BYTE	041, 377, <LSTAGR2&377>, <LSTAGR2/400>
+LSTAGL:	.BYTE	214, 214, 214		; mirrored
+LSTAGL2:	.BYTE	241, 377, <LSTAGL2&377>, <LSTAGL2/400>
+
+; Stick-swing (pre-sword fire action), ZX $CCDF/$CCEA: 7-step lead-in, then
+; hold the last frame -- RSSTICK's own SWINGCNT ends the swing, not this
+; list running out (OBJSTEP has no "stop", only loop/hold).
+LSTICKR:	.BYTE	035, 035, 036, 036, 037, 037, 040
+LSTICKR2:	.BYTE	040, 377, <LSTICKR2&377>, <LSTICKR2/400>
+LSTICKL:	.BYTE	235, 235, 236, 236, 237, 237, 240	; mirrored
+LSTICKL2:	.BYTE	240, 377, <LSTICKL2&377>, <LSTICKL2/400>
+
+LRUNR:	.BYTE	014, 013			; run right: 2-frame lead-in...
+LRUNRL:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 010, 011, 377
+	.BYTE	<LRUNRL&377>, <LRUNRL/400>	; ...then loop the 000..011 cycle
+LRUNL:	.BYTE	214, 213			; run left (mirrored)
+LRUNLL:	.BYTE	200, 201, 202, 203, 204, 205, 206, 207, 210, 211, 377
+	.BYTE	<LRUNLL&377>, <LRUNLL/400>
+
+LRUNU:	.BYTE	017, 017, 020, 020, 377		; run up  (back view)
+	.BYTE	<LRUNU&377>, <LRUNU/400>
+LRUND:	.BYTE	015, 015, 016, 016, 377		; run down (front view)
+	.BYTE	<LRUND&377>, <LRUND/400>
+
+LTURNL:	.BYTE	015, 377, <LRUNLL&377>, <LRUNLL/400>	; 1 lead-in, then run-left loop
+LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
+	.EVEN
+
+; Guard frame lists, ZX $AC51-$AC7F.  Frames via L8DC4: $00-$07 walk right
+; (8 distinct), $08-$0B walk left with shield (4 distinct, played twice),
+; $0C front (the turn lead-in frame), $0D/$0E fire right/left.  LAC51/LAC5C
+; are the plain walk cycles (GUARDINIT, GUARDSTEP's not-drawn tail); LAC67/
+; LAC6B are turn lead-ins (GUARDSTEP Stage 7a); LAC6F/LAC75 (aim) are wired to
+; GUARDSTEP Stage 7b's arrow launch; LAC7B/LAC7F are wired to the hit/dead
+; path.
+
+LAC51:	.BYTE	013, 012, 011, 010, 013, 012, 011, 010, 377	; backward walk
+	.BYTE	<LAC51&377>, <LAC51/400>
+LAC5C:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 377	; forward walk
+	.BYTE	<LAC5C&377>, <LAC5C/400>
+LAC67:	.BYTE	014, 377, <LAC5C&377>, <LAC5C/400>	; 1 turn frame, joins forward
+LAC6B:	.BYTE	014, 377, <LAC51&377>, <LAC51/400>	; 1 turn frame, joins backward
+LAC6F:	.BYTE	015, 015, 015, 377, <LAC5C&377>, <LAC5C/400>	; 3 turn frames,
+							; joins forward -- kneel/aim
+							; right ($AA31's $BF69 claim)
+LAC75:	.BYTE	016, 016, 016, 377, <LAC51&377>, <LAC51/400>	; 3 turn frames,
+							; joins backward -- kneel/aim
+							; left
+;
+; Death sequence, ZX $AC7B: 2 turn frames, then local frames $10-$12 (front/
+; dying/dead -- LB9A36/LB9A56/LB9A76 via L8DC4), FF-terminated looping to its
+; own LAC7F (4 bytes in, at the $12/dead byte) so it parks there forever.  A
+; fresh kill starts at LAC7B and plays the whole thing; a room re-entry that
+; already holds a corpse starts at LAC7F directly, showing the dead pose with
+; no replay -- see ZX $AB42/$AB4A vs $C34A/$C276.
+LAC7B:	.BYTE	014, 014, 020, 021
+LAC7F:	.BYTE	022, 377, <LAC7F&377>, <LAC7F/400>
+
+	.EVEN
+
+;------------------------------------------------------------------------------
+; Bit-reverse lookup table, ZX $FD00 -- LFD00[N] is N with its bits reversed.
+;
+; The ZX built this at startup with $CFEE; here it is precalculated, so nothing
+; has to run before the first room is drawn.
+;
+; Used to mirror room blocks horizontally ($C1D6, ROBINCOR.MAC) and sprite
+; frames ($C8B7, ROBINCOR.MAC/ROBINSPR.MAC), and by the message printer's
+; PRTCOMMITTIL/PRTCOMMITSHADOW/PRTCOMMITERASE sinks (ROBINCOR.MAC): each byte
+; of a row is bit-reversed and the row's bytes are then swapped end for end.
+;------------------------------------------------------------------------------
+
+LFD00:
+	.BYTE	000,200,100,300,040,240,140,340	; 000-007
+	.BYTE	020,220,120,320,060,260,160,360	; 010-017
+	.BYTE	010,210,110,310,050,250,150,350	; 020-027
+	.BYTE	030,230,130,330,070,270,170,370	; 030-037
+	.BYTE	004,204,104,304,044,244,144,344	; 040-047
+	.BYTE	024,224,124,324,064,264,164,364	; 050-057
+	.BYTE	014,214,114,314,054,254,154,354	; 060-067
+	.BYTE	034,234,134,334,074,274,174,374	; 070-077
+	.BYTE	002,202,102,302,042,242,142,342	; 100-107
+	.BYTE	022,222,122,322,062,262,162,362	; 110-117
+	.BYTE	012,212,112,312,052,252,152,352	; 120-127
+	.BYTE	032,232,132,332,072,272,172,372	; 130-137
+	.BYTE	006,206,106,306,046,246,146,346	; 140-147
+	.BYTE	026,226,126,326,066,266,166,366	; 150-157
+	.BYTE	016,216,116,316,056,256,156,356	; 160-167
+	.BYTE	036,236,136,336,076,276,176,376	; 170-177
+	.BYTE	001,201,101,301,041,241,141,341	; 200-207
+	.BYTE	021,221,121,321,061,261,161,361	; 210-217
+	.BYTE	011,211,111,311,051,251,151,351	; 220-227
+	.BYTE	031,231,131,331,071,271,171,371	; 230-237
+	.BYTE	005,205,105,305,045,245,145,345	; 240-247
+	.BYTE	025,225,125,325,065,265,165,365	; 250-257
+	.BYTE	015,215,115,315,055,255,155,355	; 260-267
+	.BYTE	035,235,135,335,075,275,175,375	; 270-277
+	.BYTE	003,203,103,303,043,243,143,343	; 300-307
+	.BYTE	023,223,123,323,063,263,163,363	; 310-317
+	.BYTE	013,213,113,313,053,253,153,353	; 320-327
+	.BYTE	033,233,133,333,073,273,173,373	; 330-337
+	.BYTE	007,207,107,307,047,247,147,347	; 340-347
+	.BYTE	027,227,127,327,067,267,167,367	; 350-357
+	.BYTE	017,217,117,317,057,257,157,357	; 360-367
+	.BYTE	037,237,137,337,077,277,177,377	; 370-377

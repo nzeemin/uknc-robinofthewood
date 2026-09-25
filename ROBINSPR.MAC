@@ -17,6 +17,42 @@
 ; $C6D6 XORs into the shadow bitmap.
 ;------------------------------------------------------------------------------
 
+L8D80:					; frame base for Robin's own record
+	.WORD	L8E24,L8E87,L8EEA,L8F4D,L8FB0,L9013,L9076,L90D9	; frames 0.-7.
+	.WORD	L913C,L919F,L919F,L9202,L9265,L92C8,L932B,L938E	; frames 8.-15.
+	.WORD	L93F1,L8E24,L8E24,L8E24,LA053,LA073,LA093,LA0B3	; frames 16.-23.
+	.WORD	LA0D3,LA0F3,LA113,LA133,LA153,LA190,LA1B0,LA1D0	; frames 24.-31.
+	.WORD	LA1F0,LA210	; frames 32.-33.
+L8DC4:					; frame base used by $C6D8 for other actors
+	.WORD	L9454,L94B7,L951A,L957D,L95E0,L9643,L96A6,L9709	; frames 0.-7.
+	.WORD	L976C,L97CF,L9832,L9895,L98F8,L995B,L99BE,L99BE	; frames 8.-15.
+	.WORD	L9A36,L9A56,L9A76	; frames 16.-18.
+L8DEA:					; frame base used by $C6D8 for other actors
+	.WORD	LA230,LA26D,LA2AA,LA83C,LA89F,LA902,LA45E,LA4C1	; frames 0.-7.
+	.WORD	LA524,LA587,LA5EA,LA64D,LA6B0,LA713,LA776,LA7D9	; frames 8.-15.
+	.WORD	LA965,LA998,LA9CB,LA9FE	; frames 16.-19.
+
+; Sprite cell-colour ramp and its selector table -- the port of $8E1C / $8E12,
+; used by $C790.
+;
+; L8E1C is a fixed 8-byte attribute ramp shared by every actor (BRIGHT dropped
+; here).  A frame's flag byte -- its 3rd header byte -- picks a start point in
+; the ramp through L8E12 (5 words, entry = flag AND 077): Robin 0 -> green,
+; guard $41 -> cyan, Hermit $02 -> white, Bishop $03 -> magenta, boar $04 ->
+; red.  Flag bit 7 advances the ramp one step per cell across a row, bit 6 one
+; step per row; with neither the actor is a single flat colour.
+;
+; STAMPCOLOR (ROBINCOR.MAC, folded into DRAWSPRITE) copies the chosen ramp
+; bytes into DIRTYCELLS over the sprite's footprint.  DRAWCELL then uses a
+; cell's ramp byte as its attribute wherever the room left SHADOWATR at 0 --
+; so an actor shows in its own colour over untiled black and tints to the
+; scenery colour where a block painted one.
+
+L8E1C:	.BYTE	004,005,007,005,005,007,003,002	; green cyan white cyan cyan white magenta red
+L8E12:	.WORD	L8E1C, L8E1C+1, L8E1C+5, L8E1C+6, L8E1C+7
+
+;------------------------------------------------------------------------------
+
 ; Robin run 0
 L8E24:	.BYTE	003,040,000			; header
 	.BYTE	000,000,000,000,310,000,000,004
