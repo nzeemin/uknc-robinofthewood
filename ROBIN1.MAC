@@ -687,6 +687,16 @@ STARTC:
 .INCLUDE /ROBINVAR.MAC/
 .INCLUDE /ROBINCOR.MAC/
 
+; Data modules
+.INCLUDE /ROBINFNT.MAC/
+.INCLUDE /ROBINGFN.MAC/
+.INCLUDE /ROBINRBL.MAC/
+.INCLUDE /ROBINRTP.MAC/
+.INCLUDE /ROBINRMX.MAC/
+.INCLUDE /ROBINSPR.MAC/
+.INCLUDE /ROBININD.MAC/
+.INCLUDE /ROBINDAT.MAC/
+
 ;------------------------------------------------------------------------------
 ; Version string and stack.  Kept above the buffers below so that everything
 ; the .SAV actually has to carry comes first -- the uninitialized areas after
@@ -698,6 +708,55 @@ VERSION:
 .INCLUDE /VERSIO.MAC/
 	.BYTE	0
 	.EVEN
+
+;------------------------------------------------------------------------------
+; Tile buffer: the CPU->PPU ring.
+;
+; Producer is DRAWALL here, consumer is DRTILS in ROBIN1.MAC.
+; Each record: 2. bytes screen address, 8. pixel bytes, 1. attribute byte, 1. pad.
+; A record with a zero screen address word is free.  The screen address is
+; written LAST -- that store is what publishes the record to the PPU.
+
+	.EVEN				; the PPU reads this ring as words, at TILBUF/2
+TILBUF:	.BLKB	TLBUFS*12.
+TLBUFE:					; Tile buffer end
+TLBUFA:	.WORD	TLBUFE-10.		; Current address in the Tile Buffer
+
+SCRADR:	.WORD	SCRTOP			; Current screen address during a flush
+CELLOFS:	.WORD	0		; Current offset into SHADOWATR / DIRTYCELLS
+PIXOFS:		.WORD	0		; Current offset into SHADOWPIX
+
+;------------------------------------------------------------------------------
+; Shadow screen
+;
+; The ZX original renders into a shadow bitmap plus a shadow attribute area and
+; flushes only the changed cells to the real screen.  We keep exactly that:
+;
+;   ZX $EB00 shadow pixels  -> SHADOWPIX, 144 lines x 32 bytes
+;   ZX $E800 shadow attrs   -> SHADOWATR, 18 rows x 32 cells
+;   ZX $E500 changed cells  -> DIRTYCELLS, one flag byte per cell
+;   ZX $C85C flush          -> DRAWALL below, feeding the TILBUF ring
+;
+; Sprite and block drawing keep working on SHADOWPIX as 1bpp mono, exactly like
+; on the ZX, so the whole renderer above the flush ports over unchanged.
+;
+; Cell (COL,ROW) pixel data starts at SHADOWPIX + ROW*256. + COL,
+; with 32. bytes between its 8 pixel lines.
+; Cell (COL,ROW) attribute is at SHADOWATR + ROW*32. + COL.
+
+SHADOWPIX:	.BLKB	<PLAYH*8.>*PLAYW	; 144 lines x 32 bytes = 4608. bytes
+SHADOWATR:	.BLKB	PLAYH*PLAYW		; 18 x 32 = 576. bytes
+DIRTYCELLS:	.BLKB	PLAYH*PLAYW		; non-zero = cell needs a flush
+
+; Attribute byte layout, ZX compatible minus BRIGHT:
+;   bits 0-2  INK
+;   bits 3-5  PAPER
+;   bit  6    free (was BRIGHT -- dropped for this port)
+;   bit  7    free (was FLASH)
+; Candidate for folding DIRTYCELLS into SHADOWATR later; note that on the ZX
+; the $E500 area also serves as save-background-under-sprite scratch, which
+; still needs its own storage either way.
+;------------------------------------------------------------------------------
 
 STACK::	.BLKW	20
 
