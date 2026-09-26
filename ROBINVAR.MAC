@@ -4,6 +4,110 @@
 ; unlike ROBINDAT.MAC's data (which is read-only).
 ;------------------------------------------------------------------------------
 
+;------------------------------------------------------------------------------
+; Room drawing variables
+
+CURROOM:	.WORD	0	; $C548, packed room number: column in the high
+				; nibble, row in the rest
+TREEROOM:	.WORD	0	; $D3B6, Robin's start room -- not independently
+				; rolled, just CURROOM's value right after
+				; GAMEMAIN picks it (see DRAWSCENARIO)
+ROOMIDX:	.WORD	0	; $C547, index into the table DESCTAB points at
+DESCTAB:	.WORD	0	; $C54A, L7B39 or L8511
+ROOMFLAG:	.WORD	0	; $C0E8, bit 7 of the room's world-map byte
+MIRRADJ:	.WORD	0	; the column mirror adjust, 034 or 0
+
+;------------------------------------------------------------------------------
+; MIRRORBLOCK - Mirror a block horizontally, in place
+
+MIRHDR:	.WORD	0		; the header, after its flag has been flipped
+
+;------------------------------------------------------------------------------
+; DRAWBLOCK - Draw one block token onto the shadow screen
+
+BLKNUM:	.WORD	0		; block number from the token
+BLKROW:	.WORD	0		; character row
+BLKCOL:	.WORD	0		; column group, 4 character cells each
+BLKHDR:	.WORD	0		; the block's header byte
+
+;------------------------------------------------------------------------------
+; Collectibles and weapons
+
+QUIVFLAG:	.WORD	0
+KEYFLAG:	.WORD	0
+
+LIVES:		.WORD	0		; capped at 9., matching ZX's $D5A4
+
+SWORDFLAG:	.WORD	0		; ZX $D59D
+BOWFLAG:	.WORD	0		; ZX $D59E
+; Magic arrows bought, 0-3 -- ZX $D5A1.  Also the trigger for a forest gate
+; elsewhere ($C462's hint message, not yet ported) once it reaches 3
+ARROWCOUNT:	.WORD	0
+ENTPAID:	.WORD	0		; ZX $DFE6, cleared on room entry (ENTERROOM)
+ENTBOWCD:	.WORD	0		; ZX $D5A0 -- currently inert, no consumer yet
+ARROWHITS:	.WORD	0		; ZX $D5A5 -- currently inert, no producer yet
+
+; Projectile array, ZX $BF67 -- 4 objects x 2 bytes, object 0 is Robin's
+; arrow, objects 1-3 are the 3 guard's arrows.  Data only for now -- no
+; stepper/launcher/draw/hit-test exists yet.
+;
+; Per object: [0] position byte, [1] direction/flags byte.  [0]=0 means the
+; slot is empty.  [1] is packed and reused across the object's lifetime, not
+; a clean field: bit 7 and bit 6 each select a step direction (consumed once
+; per step by the flight code, then cleared); the low bits hold the row,
+; which doubles as an "in-flight" animation-frame check ($0A-$0D) for the
+; arrow-vs-guard hit test; after the direction bits are consumed, bit 6 gets
+; reused as a mid-flight collision flag (set when the draw's XOR finds the
+; pixel already on) and, for the arrow specifically, as the "hit a guard"
+; flag.  Cleared 7 bytes at a time on every room change (ZX $C3BF).
+PROJARR:	.BYTE	0, 0		; object 0 -- Robin's arrow
+		.BYTE	0, 0		; object 1 -- guard's arrow
+		.BYTE	0, 0		; object 2 -- guard's arrow
+		.BYTE	0, 0		; object 3 -- guard's arrow
+		.EVEN
+
+;------------------------------------------------------------------------------
+; Objects
+
+OBJLOGN	= 30.				; live-table slots, matching $D4AD's own 30
+
+; room, X, Y, type -- room/X/Y from $D4AD verbatim (room is the same packed
+; word CURROOM/$C548 itself uses, confirmed identical encoding); type
+; starts 0 (empty) and is filled in by PLACEWREATH/PLACERANDOM at GAMEMAIN
+; init, never baked in here.
+OBJLOG:
+	.WORD	219., 80., 88., 0
+	.WORD	3.,  48., 96., 0
+	.WORD	4.,  92., 96., 0
+	.WORD	6.,  92., 96., 0
+	.WORD	14., 8.,  88., 0
+	.WORD	20., 8.,  88., 0
+	.WORD	33., 8.,  88., 0
+	.WORD	35., 92., 96., 0
+	.WORD	37., 92., 96., 0
+	.WORD	46., 88., 88., 0
+	.WORD	63., 80., 88., 0
+	.WORD	81., 80., 88., 0
+	.WORD	126.,24., 96., 0
+	.WORD	128.,92., 96., 0
+	.WORD	159.,40., 96., 0
+	.WORD	165.,72., 96., 0
+	.WORD	174.,72., 96., 0
+	.WORD	177.,92., 96., 0
+	.WORD	182.,92., 96., 0
+	.WORD	185.,72., 96., 0
+	.WORD	202.,48., 96., 0
+	.WORD	218.,80., 88., 0
+	.WORD	223.,92., 88., 0
+	.WORD	233.,44., 96., 0
+	.WORD	242.,80., 88., 0
+	.WORD	245.,72., 96., 0
+	.WORD	248.,24., 88., 0
+	.WORD	252.,72., 96., 0
+	.WORD	274.,80., 88., 0
+	.WORD	286.,80., 88., 0
+
+;------------------------------------------------------------------------------
 ; Guard route table, ZX $DEAB -- 3 entries of 28 bytes, indexed by $AA31's
 ; A = (home column - room column + 1) AND $0F: entry 0/1/2 for the guard's
 ; home one column left of / on / one column right of the room.  Read by
@@ -150,5 +254,125 @@ TLBUFA:	.WORD	TLBUFE-10.		; Current address in the Tile Buffer
 SCRADR:	.WORD	SCRTOP			; Current screen address during a flush
 CELLOFS:	.WORD	0		; Current offset into SHADOWATR / DIRTYCELLS
 PIXOFS:		.WORD	0		; Current offset into SHADOWPIX
+
+;------------------------------------------------------------------------------
+; OBJPICKUP -- Robin's real pixel position, this test
+
+RPPX:	.WORD	0			; Robin's real pixel X, this test
+RPPY:	.WORD	0			; Robin's real pixel Y, this test
+
+;------------------------------------------------------------------------------
+; Pickup dispatch (PICKUPTEST/HUDCARRY and friends)
+
+PKCOL:	.WORD	0			; this pickup's fields, captured before
+PKROW:	.WORD	0			; PRINTERASE/the dispatch clobber R4
+PKTYPE:	.WORD	0
+
+HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
+
+LIVEBUF:	.BYTE	060, 0, 6, 0	; one-glyph PRINTAT string: digit
+					; (patched each call), terminator,
+					; attribute (6 = yellow, matching the
+					; ZX original), terminator
+
+;------------------------------------------------------------------------------
+; Message printer (PRINTSTR/PRINTAT and their PRTCOMMIT* sinks) -- see
+; docs/MessagePrinter.md
+
+PRTPOS:	.WORD	0			; screen address of the next cell (PRTCOMMITTIL)
+PRTROW:	.WORD	0			; screen address of the current row's first cell
+PRTATTP:	.WORD	0		; cursor into the attribute stream
+PRTMIR:	.WORD	0			; non-zero while glyphs are mirrored
+PRTLAST:	.WORD	0		; the last real attribute byte seen
+PRTCOL0:	.WORD	0		; starting character column (CR returns here)
+PRTCOL:		.WORD	0		; current character column (PRTCOMMITSHADOW)
+PRTCROW:	.WORD	0		; current character row (PRTCOMMITSHADOW)
+
+;------------------------------------------------------------------------------
+; DRAWSPRITE/GLYPHDRAW scratch (narrow-class sprite draw, and the wide-glyph
+; grid draw) -- see docs/Rendering.md
+
+SPRSRC:		.WORD	0		; walking pointer into the frame's pixel rows
+SPRROWS:	.WORD	0		; rows left to plot
+SPRW:		.WORD	0		; width class, 2 or 3
+SPRMIR:		.WORD	0		; mirror flag
+SPRADR:		.WORD	0		; shadow address of the current row
+SPRSHF:		.WORD	0		; sub-cell shift, 0 / 2 / 4 / 6 bits
+SPRB0:		.WORD	0		; the row's source bytes, top to bottom
+SPRB1:		.WORD	0
+SPRB2:		.WORD	0
+SPRDR0:		.WORD	0		; touched cell rectangle, for the dirty marks
+SPRDR1:		.WORD	0
+SPRDC0:		.WORD	0
+SPRFLAG:	.WORD	0		; frame flag byte -- colour select + repeat bits
+SPRRAMP:	.WORD	0		; -> the chosen start in the L8E1C colour ramp
+SPRDCN:		.WORD	0		; footprint width, in cells, for the 80$ ramp stamp
+;
+GLYROWS:	.WORD	0		; wide-glyph frames: grid rows left, 5. down to 0
+GLYROWSRC:	.WORD	0		; -> the current grid row's 6. glyph-code bytes
+GLYROWADR:	.WORD	0		; shadow address of the current grid row, column 0
+GLYPIXCNT:	.WORD	0		; font-row counter within one glyph cell, 8. down to 0
+
+;------------------------------------------------------------------------------
+; Game loop / RNG
+
+GAMEFRAME:	.WORD	0
+RNGSEED:	.WORD	1
+
+;------------------------------------------------------------------------------
+; Guard state (GUARDINIT/GUARDSTEP/GROUPADR*)
+
+GGROUP:	.WORD	0		; this room's LIVE group base in GSEED, set by
+				; GROUPADRLIVE (GUARDINIT) -- not GROUPADR's
+				; respawn-target index (GUARDROLL)
+
+GFIRESLOT: .WORD	0	; this GUARDSTEP call's guard slot (0-3, from
+				; GSTEPIDX) -- stashed because R2 gets reused by
+				; the route/patrol scan below before Stage 7b
+				; needs it for the arrow-slot pick
+
+GSTEPIDX:	.WORD	0		; which of the 4 guard slots is next, 0-3
+
+; $DEAB/$DEC7/$DEE3 route-entry start address, indexed by GPRESENT's 0-2.
+GROUTETAB:	.WORD	LDEAB, LDEC7, LDEE3
+
+;------------------------------------------------------------------------------
+; Boar state (BOARSPAWN/BOARSTEP)
+
+BSTEPIDX:	.WORD	0		; which of the 4 boar slots is next, 0-3
+
+;------------------------------------------------------------------------------
+; Draw pipeline (OBJSTEP)
+
+OBJBASE:	.WORD	0		; frame-pointer-table base, kept across DRAWFRAME
+
+;------------------------------------------------------------------------------
+; Robin state
+
+ENERGY:		.WORD	17		; ZX default, $0F
+
+CMTMPX:	.WORD	0		; Robin's position while the axis gates run
+CMTMPY:	.WORD	0
+
+FIREHELD:	.WORD	0		; this frame's fire bit, kept out of the
+					; direction mask below -- see RSSIT
+
+ROBST:		.BYTE	0		; 0 SIT R  1 SIT L  2 RUN R  3 RUN L  4 RUN U  5 RUN D
+					; 6 STICK R  7 STICK L  8 STAGGER R  9 STAGGER L
+					; (own numbering, not ZX's $0A/$0B/$0E/$0F)
+	.EVEN
+
+SWINGCNT:	.WORD	0		; stick-swing hold, ZX's $CC7A ($10 on trigger)
+
+; Robin's animation-code register, ZX $CC7B: 0 = normal, ROBST/ROBSTATE (the
+; per-frame state machine in ROBINCOR.MAC) drives him from live input as
+; usual.  Nonzero = a special sequence is in progress; MOVEROBIN's own gate
+; (see its top) skips the whole input/movement/state machine while this is
+; set and just lets the already-armed frame-list cursor keep animating
+; through OBJSTEP, same as ZX locks Robin out of normal control whenever
+; $CC7B (or $CC7A) is live.  The only sequence that sets it so far is the
+; critical-hit stagger, ported in ROBACTSTEP (ZX $BE25/$CB9D/$CBC7/$CBD6/
+; $C055).
+ROBACT:		.WORD	0
 
 ;------------------------------------------------------------------------------

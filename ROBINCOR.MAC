@@ -160,16 +160,6 @@ READINPUT:
 ; These routines follow the usual Z80 register mapping so they can be diffed
 ; against the original: R0 = A, R1 = BC, R2 = DE, R3 = HL, R4 = IX, R5 = IY.
 
-CURROOM:	.WORD	0	; $C548, packed room number: column in the high
-				; nibble, row in the rest
-TREEROOM:	.WORD	0	; $D3B6, Robin's start room -- not independently
-				; rolled, just CURROOM's value right after
-				; GAMEMAIN picks it (see DRAWSCENARIO)
-ROOMIDX:	.WORD	0	; $C547, index into the table DESCTAB points at
-DESCTAB:	.WORD	0	; $C54A, L7B39 or L8511
-ROOMFLAG:	.WORD	0	; $C0E8, bit 7 of the room's world-map byte
-MIRRADJ:	.WORD	0	; the column mirror adjust, 034 or 0
-
 ;------------------------------------------------------------------------------
 ; Skip forward to the ROOMIDX-th descriptor in the table at DESCTAB -- the port
 ; of the ZX routine at $C1C1.
@@ -206,8 +196,6 @@ SKIPDESC:
 ;
 ; Input: R2 -> the block data, header byte first.  R2 is preserved.
 ; Utilizes R0-R5.
-
-MIRHDR:	.WORD	0		; the header, after its flag has been flipped
 
 MIRRORBLOCK:
 	MOV	R2, -(SP)		; keep the block address for the caller
@@ -296,11 +284,6 @@ SWAPPLAIN:
 ; Input: BLKNUM = block number (bit 7 = the token's own mirror flag)
 ;        BLKROW = character row, BLKCOL = column group (0-7, 4 cells each)
 ; Utilizes R0-R5.
-
-BLKNUM:	.WORD	0		; block number from the token
-BLKROW:	.WORD	0		; character row
-BLKCOL:	.WORD	0		; column group, 4 character cells each
-BLKHDR:	.WORD	0		; the block's header byte
 
 DRAWBLOCK:
 ; look the block up in the address table
@@ -601,44 +584,6 @@ ENTERROOM:
 ; type 0 = empty slot (skipped by OBJSHOW/OBJPICKUP); ZX's own $D9F6
 ; values otherwise: 1=wreath, 2=gold, 5=flower, 6=key, 7=quiver.
 
-OBJLOGN	= 30.				; live-table slots, matching $D4AD's own 30
-
-; room, X, Y, type -- room/X/Y from $D4AD verbatim (room is the same packed
-; word CURROOM/$C548 itself uses, confirmed identical encoding); type
-; starts 0 (empty) and is filled in by PLACEWREATH/PLACERANDOM at GAMEMAIN
-; init, never baked in here.
-OBJLOG:
-	.WORD	219., 80., 88., 0
-	.WORD	3.,  48., 96., 0
-	.WORD	4.,  92., 96., 0
-	.WORD	6.,  92., 96., 0
-	.WORD	14., 8.,  88., 0
-	.WORD	20., 8.,  88., 0
-	.WORD	33., 8.,  88., 0
-	.WORD	35., 92., 96., 0
-	.WORD	37., 92., 96., 0
-	.WORD	46., 88., 88., 0
-	.WORD	63., 80., 88., 0
-	.WORD	81., 80., 88., 0
-	.WORD	126.,24., 96., 0
-	.WORD	128.,92., 96., 0
-	.WORD	159.,40., 96., 0
-	.WORD	165.,72., 96., 0
-	.WORD	174.,72., 96., 0
-	.WORD	177.,92., 96., 0
-	.WORD	182.,92., 96., 0
-	.WORD	185.,72., 96., 0
-	.WORD	202.,48., 96., 0
-	.WORD	218.,80., 88., 0
-	.WORD	223.,92., 88., 0
-	.WORD	233.,44., 96., 0
-	.WORD	242.,80., 88., 0
-	.WORD	245.,72., 96., 0
-	.WORD	248.,24., 88., 0
-	.WORD	252.,72., 96., 0
-	.WORD	274.,80., 88., 0
-	.WORD	286.,80., 88., 0
-
 ; type -> icon string address (+1/+2 header-skip baked in, mirrors ZX's
 ; own per-type $D7D0 icon pointers for the 5 types this port handles).
 TYPICON:
@@ -765,9 +710,6 @@ PLACERANDOM:
 ;
 ; Utilizes R0-R4.
 
-RPPX:	.WORD	0			; Robin's real pixel X, this test
-RPPY:	.WORD	0			; Robin's real pixel Y, this test
-
 OBJPICKUP:
 	MOV	#ROBIN, R4
 	CLR	R0
@@ -853,10 +795,6 @@ OBJMATCH:
 	BEQ	WREATHPICKUP
 90$:	RETURN
 
-PKCOL:	.WORD	0			; this pickup's fields, captured before
-PKROW:	.WORD	0			; PRINTERASE/the dispatch clobber R4
-PKTYPE:	.WORD	0
-
 ;------------------------------------------------------------------------------
 ; What picking each type up does, beyond erasing its world icon (handled
 ; above already).  Ported from this session's disasm study of $D94B/$DB98/
@@ -917,12 +855,9 @@ HUDCARRY:
 	BLT	10$
 	RETURN
 
-HCSLOT:	.WORD	0			; HUDCARRY's own slot-index cursor
-
 ; Quiver -- this port's own dedicated always-shown HUD slot (see header
 ; note above; ZX's own $D8FE would route this into the carry queue
 ; instead).  Drawn once, on pickup.  Utilizes R0-R5.
-QUIVFLAG:	.WORD	0
 QUIVPICKUP:
 	MOV	#1, QUIVFLAG
 	MOV	#LB567+2, R0		; upright/HUD quiver variant, its own 2-byte
@@ -933,7 +868,6 @@ QUIVPICKUP:
 ; Key -- this port's own dedicated always-shown HUD slot (see header note
 ; above; ZX's own $D8FE only flips the unrelated $D59F re-seed flag here,
 ; no icon).  Drawn once, on pickup.  Utilizes R0-R5.
-KEYFLAG:	.WORD	0
 KEYPICKUP:
 	MOV	#1, KEYFLAG
 	MOV	#LB52E+1, R0		; ZX $B52D/$B52E's own 2-byte position header
@@ -945,11 +879,6 @@ KEYPICKUP:
 ; icon drawn once per pickup, count redrawn as a single ASCII digit next
 ; to it.  $D91A's own second *text* message ($DA09) is not ported --
 ; out of scope, the icon+count is the core signal.  Utilizes R0-R5.
-LIVES:		.WORD	0		; capped at 9., matching ZX's $D5A4
-LIVEBUF:	.BYTE	060, 0, 6, 0	; one-glyph PRINTAT string: digit
-					; (patched each call), terminator,
-					; attribute (6 = yellow, matching the
-					; ZX original), terminator
 WREATHPICKUP:
 	CMP	LIVES, #9.
 	BGE	DRAWLIVES
@@ -986,34 +915,6 @@ DRAWLIVES:
 ; core signal" simplification, same as the wreath counter's own skipped
 ; second message.
 
-SWORDFLAG:	.WORD	0		; ZX $D59D
-BOWFLAG:	.WORD	0		; ZX $D59E
-; Magic arrows bought, 0-3 -- ZX $D5A1.  Also the trigger for a forest gate
-; elsewhere ($C462's hint message, not yet ported) once it reaches 3
-ARROWCOUNT:	.WORD	0
-ENTPAID:	.WORD	0		; ZX $DFE6, cleared on room entry (ENTERROOM)
-ENTBOWCD:	.WORD	0		; ZX $D5A0 -- currently inert, no consumer yet
-ARROWHITS:	.WORD	0		; ZX $D5A5 -- currently inert, no producer yet
-
-; Projectile array, ZX $BF67 -- 4 objects x 2 bytes, object 0 is Robin's
-; arrow, objects 1-3 are the 3 guard's arrows.  Data only for now -- no
-; stepper/launcher/draw/hit-test exists yet.
-;
-; Per object: [0] position byte, [1] direction/flags byte.  [0]=0 means the
-; slot is empty.  [1] is packed and reused across the object's lifetime, not
-; a clean field: bit 7 and bit 6 each select a step direction (consumed once
-; per step by the flight code, then cleared); the low bits hold the row,
-; which doubles as an "in-flight" animation-frame check ($0A-$0D) for the
-; arrow-vs-guard hit test; after the direction bits are consumed, bit 6 gets
-; reused as a mid-flight collision flag (set when the draw's XOR finds the
-; pixel already on) and, for the arrow specifically, as the "hit a guard"
-; flag.  Cleared 7 bytes at a time on every room change (ZX $C3BF).
-PROJARR:	.BYTE	0, 0		; object 0 -- Robin's arrow
-		.BYTE	0, 0		; object 1 -- guard's arrow
-		.BYTE	0, 0		; object 2 -- guard's arrow
-		.BYTE	0, 0		; object 3 -- guard's arrow
-		.EVEN
-
 ; Remove up to 3 gold (2) slots from CARRYQ, shifting the rest down and
 ; zero-filling the vacated tail, then redraw the carry row.  Port of
 ; $DB82's effect, adapted to CARRYQ's own 0=empty blind-array model
@@ -1036,10 +937,9 @@ CARRYPOP:
 ;
 	MOV	#<CARRYQ+8.>, R1	; zero-fill from the write cursor to the end
 40$:	CMP	R4, R1
-	BGE	50$
+	BGE	HUDCARRY
 	CLRB	(R4)+
 	BR	40$
-50$:	JMP	HUDCARRY
 
 ; Called once per frame from GAMELOOP.  Utilizes R0-R4.
 ENTCHECK:
@@ -1378,15 +1278,6 @@ PRTCOMMITERASE:
 PRTDONE:
 90$:	RETURN
 
-PRTPOS:	.WORD	0			; screen address of the next cell (PRTCOMMITTIL)
-PRTROW:	.WORD	0			; screen address of the current row's first cell
-PRTATTP:	.WORD	0		; cursor into the attribute stream
-PRTMIR:	.WORD	0			; non-zero while glyphs are mirrored
-PRTLAST:	.WORD	0		; the last real attribute byte seen
-PRTCOL0:	.WORD	0		; starting character column (CR returns here)
-PRTCOL:		.WORD	0		; current character column (PRTCOMMITSHADOW)
-PRTCROW:	.WORD	0		; current character row (PRTCOMMITSHADOW)
-
 ;------------------------------------------------------------------------------
 ; Claim the next free TILBUF record -- the ring-slot half of DRAWCELL, shared
 ; through the same TLBUFA cursor.  Spins until the PPU has consumed the slot.
@@ -1429,27 +1320,6 @@ CLAIMSLOT:
 ; $C6D6.  It takes a frame NUMBER and one of the three pointer-table bases,
 ; looks the frame data up, derives the mirror flag from bit 7 of the number,
 ; then falls straight into DRAWSPRITE.
-
-SPRSRC:		.WORD	0		; walking pointer into the frame's pixel rows
-SPRROWS:	.WORD	0		; rows left to plot
-SPRW:		.WORD	0		; width class, 2 or 3
-SPRMIR:		.WORD	0		; mirror flag
-SPRADR:		.WORD	0		; shadow address of the current row
-SPRSHF:		.WORD	0		; sub-cell shift, 0 / 2 / 4 / 6 bits
-SPRB0:		.WORD	0		; the row's source bytes, top to bottom
-SPRB1:		.WORD	0
-SPRB2:		.WORD	0
-SPRDR0:		.WORD	0		; touched cell rectangle, for the dirty marks
-SPRDR1:		.WORD	0
-SPRDC0:		.WORD	0
-SPRFLAG:	.WORD	0		; frame flag byte -- colour select + repeat bits
-SPRRAMP:	.WORD	0		; -> the chosen start in the L8E1C colour ramp
-SPRDCN:		.WORD	0		; footprint width, in cells, for the 80$ ramp stamp
-;
-GLYROWS:	.WORD	0		; wide-glyph frames: grid rows left, 5. down to 0
-GLYROWSRC:	.WORD	0		; -> the current grid row's 6. glyph-code bytes
-GLYROWADR:	.WORD	0		; shadow address of the current grid row, column 0
-GLYPIXCNT:	.WORD	0		; font-row counter within one glyph cell, 8. down to 0
 
 ;------------------------------------------------------------------------------
 ; Draw sprite frame NUMBER -- the head of $C6D6.  Looks the frame data up in
@@ -1786,7 +1656,6 @@ OBJSZ	= 12.
 OBJTAB:		.BLKB	NOBJ*OBJSZ
 ROBIN	= OBJTAB		; entry 0 is Robin
 
-GAMEFRAME:	.WORD	0
 ;TICKODD:	.WORD	0	; flips every frame; Robin advances on every other one
 
 RSPAWNX	= 64.			; ZX-confirmed live: $40
@@ -1797,8 +1666,6 @@ RSPAWNY	= 80.			; ZX-confirmed live: $50
 ; for the ZX's $CE6D "stir the R register" trick: the UKNC has no equivalent
 ; free-running noise source to sample, so this is a real generator instead.
 ; Period up to 65535.; the seed must stay non-zero, hence RNGINIT's guard.
-
-RNGSEED:	.WORD	1
 
 ; Reseed from the live frame counter, so each run differs.  Call once at boot,
 ; after CPUVSY so FRAMES is actually ticking.  Utilizes R0.
@@ -1829,15 +1696,6 @@ GSPCLR:					; clear OBJSZ bytes at R4, preserving R4
 	SOB	R0, 10$
 	MOV	(SP)+, R4
 	RETURN
-
-GGROUP:	.WORD	0		; this room's LIVE group base in GSEED, set by
-				; GROUPADRLIVE (GUARDINIT) -- not GROUPADR's
-				; respawn-target index (GUARDROLL)
-
-GFIRESLOT: .WORD	0	; this GUARDSTEP call's guard slot (0-3, from
-				; GSTEPIDX) -- stashed because R2 gets reused by
-				; the route/patrol scan below before Stage 7b
-				; needs it for the arrow-slot pick
 
 ; Fill the whole table with fresh randomness -- the port of $CE0A's guard-seed
 ; loop.  Call once at game start, after RNGINIT.  R3 (not R1) is the loop
@@ -2000,7 +1858,8 @@ GUARDINIT:
 	CALL	GUARDSTEP
 	CALL	GUARDSTEP
 	CALL	GUARDSTEP
-	BR	GUARDSTEP
+	;BR	GUARDSTEP
+;NOTE: fall through into GUARDSTEP
 
 ;------------------------------------------------------------------------------
 ; Guard movement -- the port of ZX $AA31, minus the shooting/hotspot-claim
@@ -2028,11 +1887,6 @@ GUARDINIT:
 ; Slot cycle, port of $AA32: which of the 4 guards $AA31 touches this call.
 ; The counter advances every call and never skip-returns -- every call fully
 ; processes one guard, so each guard updates once per 4 calls.
-
-GSTEPIDX:	.WORD	0		; which of the 4 guard slots is next, 0-3
-
-; $DEAB/$DEC7/$DEE3 route-entry start address, indexed by GPRESENT's 0-2.
-GROUTETAB:	.WORD	LDEAB, LDEC7, LDEE3
 
 ; Port of $AA31 in full -- no separate "process one guard" entry exists in
 ; the real routine; $AA31 always reads its own counter (here GSTEPIDX) to
@@ -2445,8 +2299,6 @@ BOARSPAWN:
 ;
 ; Slot cycle, port of the ZX's own per-call counter (same shape as GSTEPIDX).
 
-BSTEPIDX:	.WORD	0		; which of the 4 boar slots is next, 0-3
-
 ; Port of the ZX boar-movement block in full.  Utilizes R0-R5.
 BOARSTEP:
 	MOV	BSTEPIDX, R2		; 0-3 -- this call's boar slot
@@ -2681,29 +2533,33 @@ DBGROOMDRAW:
 ;------------------------------------------------------------------------------
 ; Stub title/menu screen, called from START in ROBIN1.MAC (after RUNPPU/
 ; CPUVSY, which START starts directly).  No real menu/options yet, just
-; "PRESS ANY KEY" (ROBININD.MAC, port-only, no ZX equivalent) on an
+; "PRESS FIRE KEY" (ROBININD.MAC, port-only, no ZX equivalent) on an
 ; otherwise blank screen, then block on FIRE -- a stand-in for "any key"
 ; since PPUKEY only tracks the game's own key bits.
 
 MAINMENU:
-	PPUCMW	#1			; clear the real screen (PPU command 1,
-					; ROBIN1.MAC) -- whatever was on screen
-					; (a room, GAME OVER's message) doesn't
-					; linger behind/around the menu text
-5$:	MOV	@#PPUKEY, R0		; wait for the key that got us here (a fresh
-	BIT	#PKEYFR, R0		; boot has none held, but GAME OVER's own
-	BNE	5$			; dismiss-key is still down at this point) to
-					; release, so the check below doesn't fire
-					; on that same press and skip the menu
-	CALL	RNGINIT			; reseed the PRNG from the live frame counter
+	PPUCMW	#1			; clear the real screen via PPU command
+5$:	MOV	@#PPUKEY, R0		; wait for all control keys to unpress
+	BNE	5$
 ;
-	MOV	#MPRESSKEY, R0		; "PRESS ANY KEY"
+	MOV	#LB587, R0		; left ornament
+	CALL	PRINTSTR
+	MOV	#LB5C0, R0		; right ornament
+	CALL	PRINTSTR
+	MOV	#MTITLE, R0
+	CALL	PRINTSTR		; print "ROBIN OF THE WOOD"
+	MOV	#MCONTROLS, R0
+	CALL	PRINTSTR		; print "CONTROLS:"
+	MOV	#MPRESSKEY, R0		; "PRESS FIRE KEY"
 	CALL	PRINTSTR
 	CALL	DRAWALL
 8$:	MOV	@#PPUKEY, R0
 	BIT	#PKEYFR, R0
 	BEQ	8$
-	;TODO: real title picture and menu, options
+;
+	CALL	RNGINIT			; reseed the PRNG from the live frame counter
+;
+;NOTE: fall through into GAMEMAIN
 ;
 ;------------------------------------------------------------------------------
 ; New-game entry point, falls straight in from MAINMENU above.
@@ -2826,8 +2682,6 @@ GAMELOOP:
 ; saved around it.
 
 FRAMEHOLD = 1			; list steps once every FRAMEHOLD+1 calls
-
-OBJBASE:	.WORD	0		; frame-pointer-table base, kept across DRAWFRAME
 
 OBJSTEP:
 	MOV	R1, OBJBASE		; DRAWFRAME clobbers R1 -- stash the base
@@ -2992,8 +2846,6 @@ PROJSTEP:
 ; own "critical" floor, where $BE25 diverts to a stagger/death animation
 ; instead of decrementing further; that branch isn't ported, so this
 ; stand-in just stops decrementing at 2.
-
-ENERGY:		.WORD	17		; ZX default, $0F
 
 ;------------------------------------------------------------------------------
 ; Check Robin against the 3 guard's arrows -- port of $BDA3, called once per
@@ -3244,9 +3096,6 @@ CANMOVE:
 80$:	CLR	R0			; not on a cell boundary => allowed
 	RETURN
 
-CMTMPX:	.WORD	0		; Robin's position while the axis gates run
-CMTMPY:	.WORD	0
-
 ;------------------------------------------------------------------------------
 ; Advance Robin one step: read input, step the pixel position (each axis gated
 ; by a wall check), run the state machine to choose the frame list, then hand
@@ -3260,9 +3109,6 @@ RMINY	= 8.			; X is left unclamped -- ROOMEDGE handles the sides
 RMAXY	= 116.
 
 RDIRS	= PKEYLT+PKEYRT+PKEYUP+PKEYDN
-
-FIREHELD:	.WORD	0		; this frame's fire bit, kept out of the
-					; direction mask below -- see RSSIT
 
 MOVEROBIN:
 	MOV	#ROBIN, R4
@@ -3359,13 +3205,6 @@ STAGTAIL:
 ; cursor (2/3) at the new frame list, and sets the facing bit (offset 1 bit 7).
 ; "Stay" leaves the cursor running so the current list keeps animating.
 
-ROBST:		.BYTE	0		; 0 SIT R  1 SIT L  2 RUN R  3 RUN L  4 RUN U  5 RUN D
-					; 6 STICK R  7 STICK L  8 STAGGER R  9 STAGGER L
-					; (own numbering, not ZX's $0A/$0B/$0E/$0F)
-	.EVEN
-
-SWINGCNT:	.WORD	0		; stick-swing hold, ZX's $CC7A ($10 on trigger)
-
 ; Robin's animation-code register, ZX $CC7B: 0 = normal, ROBST/ROBSTATE (the
 ; per-frame state machine above/below) drives him from live input as usual.
 ; Nonzero = a special sequence is in progress; MOVEROBIN's own gate (see its
@@ -3374,7 +3213,6 @@ SWINGCNT:	.WORD	0		; stick-swing hold, ZX's $CC7A ($10 on trigger)
 ; OBJSTEP, same as ZX locks Robin out of normal control whenever $CC7B (or
 ; $CC7A) is live.  The only sequence that sets it so far is the critical-hit
 ; stagger, ported in ROBACTSTEP below (ZX $BE25/$CB9D/$CBC7/$CBD6/$C055).
-ROBACT:		.WORD	0
 ROBACRIT = 156.		; ZX $6E -- one-shot "just critically hit" sentinel and
 			; the stagger's starting countdown value, both at once
 			; (ZX reuses the same register both ways; see ROBACTSTEP)

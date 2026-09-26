@@ -64,8 +64,8 @@ LB4C1:	.BYTE	130,250,203,204,205,206,205,205
 	.BYTE	006,000,000
 
 ; Unknown icon (bow?), message index $03 in $D7CE
-LB504:	.BYTE	000,273,274,275,276,277,000,106
-	.BYTE	106,104,106,106,000,000
+;LB504:	.BYTE	000,273,274,275,276,277,000,106
+;	.BYTE	106,104,106,106,000,000
 
 ; Bag-of-money icon (custom font glyphs), for event status $02
 LB512:	.BYTE	000,217,220,001,221,222,000,006
@@ -150,10 +150,12 @@ LB630:	.BYTE	000,247,250,251,252,001,360,361
 	.BYTE	007,007,000
 
 ; GAME OVER message
-LB663:	.BYTE	064,050,040,040,040,040,040,040
+LB663:	.BYTE	064,050
+	.BYTE	040,040,040,040,040,040
 	.BYTE	001
 	.ASCII	/ GAME /
-	.BYTE	001,040,040,040,040,040,040,001
+	.BYTE	001
+	.BYTE	040,040,040,040,040,040,001
 	.ASCII	/ OVER /
 	.BYTE	001,040,040,040,040,040,040,000
 	.BYTE	100,100,100,100,100,100,377,100
@@ -281,24 +283,30 @@ LD305:	.BYTE	100,220,002,151,150,147,146,145
 ; as repeated letters -- "FFFFFFF" is seven cells of attribute 106.
 ;------------------------------------------------------------------------------
 
-LACC6:	.ASCII	/0 START/
+MTITLE:	.BYTE	20., 0			; column, row
+	.ASCII	/ROBIN OF THE WOOD/<001><001>
+	.ASCII	/  /
+.INCLUDE /VERSIO.MAC/
 	.BYTE	000
-LACCE:	.BYTE	106,106,106,106,106,106,106,000	; attributes
-LACD6:	.ASCII	/1 KEYBOARD/
-	.BYTE	000
-LACE1:	.BYTE	105,105,105,105,105,105,105,105	; attributes
-	.BYTE	105,105,000
-LACEC:	.ASCII	/2 KEMPSTON/
-	.BYTE	000
+	.BYTE	107,107,107,107,107,107,107,107	; attributes
+	.BYTE	107,107,107,107,107,107,107,107
+	.BYTE	107
+	.BYTE	377,377
+	.BYTE	104,104,104,104,104,104,107,107	; attributes
+	.BYTE	104,000
 
-; "PRESS ANY KEY" -- port-only addition, no ZX equivalent.  Stub title/menu
-; screen for this port (GAMEMAIN, ROBINCOR.MAC); real menu art/options not
-; done yet.  PRINTSTR format: position header (column*4, row*8 -- character
-; column 10., row 10.), glyph stream, 000, empty attribute stream (falls
-; back to PRTATTR).
+MCONTROLS:
+	.BYTE	20., 50.		; column, row
+	.ASCII	/CONTROLS:/<001><001>
+	.ASCII	/  ARROW KEYS/<001><001>
+	.ASCII	/  SHIFT: FIRE/
+	.BYTE	000
+	.BYTE	105,000,		; attributes
+
+; "PRESS FIRE KEY" -- port-only addition, no ZX equivalent.
 MPRESSKEY:
-	.BYTE	50, 120			; column 10., row 10. (octal 50=40., 120=80.)
-	.ASCII	/PRESS ANY KEY/
+	.BYTE	30., 140.		; column, row
+	.ASCII	/PRESS FIRE TO START/
 	.BYTE	000
 	.BYTE	000			; empty attribute stream
 	.EVEN
