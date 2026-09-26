@@ -87,3 +87,68 @@ CARRYQ:	.BLKB	8.
 ; does -- 4 buckets shared across many rooms, not one entry per room.
 
 GSEED:	.BLKB	4*4*3
+
+;------------------------------------------------------------------------------
+; Boar object slots, one room-row-group's worth (4, matching BOARROW16-19's
+; own 4 entries).  Same OBJSZ record shape as OBJTAB (ROBINCOR.MAC) -- 12.
+; hardcoded rather than referencing the OBJSZ symbol, since this file is
+; .INCLUDE'd before ROBINCOR.MAC and OBJSZ isn't defined yet at this point.
+; Keep in sync with OBJSZ if that ever changes.
+
+NBOAR	= 4.
+	.EVEN
+BOARTAB: .BLKB	NBOAR*12.
+
+;------------------------------------------------------------------------------
+; Boar seed/state data, ZX $DD3F -- 48 bytes, 4 groups of 4 x 3-byte entries.
+; $DBF8 picks a group by the room's own map row: with CURROOM packed as
+; row*16+column in this port (unlike ZX's split $C548/$C549 byte pair -- see
+; the disasm session's own trace), rooms only have boars when CURROOM >= 256.
+; (row >= 16., the bottom 4 of the world map's 20 rows), and the group index
+; is simply (CURROOM>>4)-16. -- BOARROW16/17/18/19 below, one per row.
+;
+; Unlike guards, this is NOT a read-only template -- there's no seed/live-
+; state split at all.  Per the disasm session's direct trace of $DC1F-$DC7D:
+; byte 0 is the boar's home column (BPRESENT's presence test, same formula
+; as guards' GPRESENT), byte 1 is the LIVE patrol cursor, stepped in place by
+; the (not yet ported) roaming code and never reset on room entry or re-
+; rolled -- a boar's cursor persists for the whole game, with no equivalent
+; of guards' GUARDROLL reshuffle.  Byte 2 bit 6 is facing-sync, touched at
+; room entry (BOARSPAWN, ROBINCOR.MAC) same as guards' own bit 6 trick; bit 7
+; is the initial/current facing, picking the mirrored/normal frame list.
+
+BOARROW16:	.BYTE	000, 100, 000
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	012, 100, 200
+BOARROW17:	.BYTE	000, 100, 200
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	012, 100, 200
+BOARROW18:	.BYTE	000, 100, 000
+		.BYTE	012, 100, 000
+		.BYTE	005, 100, 200
+		.BYTE	012, 100, 200
+BOARROW19:	.BYTE	012, 100, 000
+		.BYTE	000, 100, 200
+		.BYTE	005, 100, 000
+		.BYTE	012, 100, 200
+
+;------------------------------------------------------------------------------
+; Tile buffer: the CPU->PPU ring.
+;
+; Producer is DRAWALL here, consumer is DRTILS in ROBIN1.MAC.
+; Each record: 2. bytes screen address, 8. pixel bytes, 1. attribute byte, 1. pad.
+; A record with a zero screen address word is free.  The screen address is
+; written LAST -- that store is what publishes the record to the PPU.
+
+	.EVEN				; the PPU reads this ring as words, at TILBUF/2
+TILBUF:	.BLKB	TLBUFS*12.
+TLBUFE:					; Tile buffer end
+TLBUFA:	.WORD	TLBUFE-10.		; Current address in the Tile Buffer
+
+SCRADR:	.WORD	SCRTOP			; Current screen address during a flush
+CELLOFS:	.WORD	0		; Current offset into SHADOWATR / DIRTYCELLS
+PIXOFS:		.WORD	0		; Current offset into SHADOWPIX
+
+;------------------------------------------------------------------------------

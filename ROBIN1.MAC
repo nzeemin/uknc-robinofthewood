@@ -18,6 +18,19 @@
 	BNE	.-4
 .ENDM
 
+; Emit a label's address as 2 bytes (low, high) -- an alternative to .WORD
+; for spots like OBJSTEP's frame-list loop-target, which must land at a fixed
+; +1/+2 from the $FF terminator with no padding.
+;
+; NOT the same as .BYTE <X&377>, <X/400>: this assembler's "/" divides
+; SIGNED, so X/400 is silently wrong by +1 once X's address has bit 15 set
+; (>= 100000) -- and code growth elsewhere can push a label past that anytime.
+; X&177400 always leaves an exact multiple of 400, and exact division isn't
+; sensitive to sign, sidestepping the bug entirely.
+.MACRO	ADDRBYTES	X
+	.BYTE	<X&377>, <<X&177400>/400>
+.ENDM
+
 ;------------------------------------------------------------------------------
 ; Screen geometry
 ;
@@ -685,6 +698,7 @@ ANTLERTAB:	.WORD	177334		; ENERGY 15 -- white
 
 STARTC:
 .INCLUDE /ROBINVAR.MAC/
+	.EVEN
 .INCLUDE /ROBINCOR.MAC/
 
 ; Data modules
@@ -708,23 +722,6 @@ VERSION:
 .INCLUDE /VERSIO.MAC/
 	.BYTE	0
 	.EVEN
-
-;------------------------------------------------------------------------------
-; Tile buffer: the CPU->PPU ring.
-;
-; Producer is DRAWALL here, consumer is DRTILS in ROBIN1.MAC.
-; Each record: 2. bytes screen address, 8. pixel bytes, 1. attribute byte, 1. pad.
-; A record with a zero screen address word is free.  The screen address is
-; written LAST -- that store is what publishes the record to the PPU.
-
-	.EVEN				; the PPU reads this ring as words, at TILBUF/2
-TILBUF:	.BLKB	TLBUFS*12.
-TLBUFE:					; Tile buffer end
-TLBUFA:	.WORD	TLBUFE-10.		; Current address in the Tile Buffer
-
-SCRADR:	.WORD	SCRTOP			; Current screen address during a flush
-CELLOFS:	.WORD	0		; Current offset into SHADOWATR / DIRTYCELLS
-PIXOFS:		.WORD	0		; Current offset into SHADOWPIX
 
 ;------------------------------------------------------------------------------
 ; Shadow screen

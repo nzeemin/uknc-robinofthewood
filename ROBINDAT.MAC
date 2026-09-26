@@ -4,37 +4,6 @@
 ; -- code that reads it stays in its own logic file (ROBINCOR.MAC, usually).
 ;------------------------------------------------------------------------------
 
-; Boar door/seed data, ZX $DD3F -- 48 bytes, 4 groups of 4 x 3-byte entries.
-; $C276 (ZX) picks a group by the room's own map row: with CURROOM packed as
-; row*16+column in this port (unlike ZX's split $C548/$C549 byte pair -- see
-; the disasm session's own trace, confirmed by hand-checking $C22F's room-
-; transition math), rooms only have boars when CURROOM >= 256. (row >= 16.,
-; the bottom 4 of the world map's 20 rows), and the group index is simply
-; (CURROOM>>4)-16. -- ROBROW16/ROBROW17/ROBROW18/ROBROW19 below, one per row.
-;
-; Per 3-byte entry: byte 0/1 are the boar's position seed, read later by the
-; roaming step (not ported yet, see $DBF8) -- spawn itself doesn't resolve a
-; boar's position, same as GUARDINIT leaves guard position to GUARDSTEP's own
-; Stage 6. Byte 2 bit 7 is the initial facing, picking between the mirrored/
-; normal frame list -- same convention GUARDINIT's own 2(R3) facing bit uses.
-
-BOARROW16:	.BYTE	000, 100, 000
-		.BYTE	005, 100, 000
-		.BYTE	012, 100, 000
-		.BYTE	012, 100, 200
-BOARROW17:	.BYTE	000, 100, 200
-		.BYTE	005, 100, 000
-		.BYTE	012, 100, 000
-		.BYTE	012, 100, 200
-BOARROW18:	.BYTE	000, 100, 000
-		.BYTE	012, 100, 000
-		.BYTE	005, 100, 200
-		.BYTE	012, 100, 200
-BOARROW19:	.BYTE	012, 100, 000
-		.BYTE	000, 100, 200
-		.BYTE	005, 100, 000
-		.BYTE	012, 100, 200
-
 ;------------------------------------------------------------------------------
 ; Ent/Hermit/start-tree room decorations for DRAWSCENARIO (ROBINCOR.MAC, port
 ; of ZX $C15E) -- 2x2 block-token arrangements, same DRAWTOKENSAT format as
@@ -86,41 +55,49 @@ STARTROOMS:
 ; target (low byte, high byte) the OBJSTEP walker jumps to.  Lists tail-share.
 
 LSITR:	.BYTE	013, 014			; sit right: lead-in, then hold 014
-LSITR2:	.BYTE	014, 377, <LSITR2&377>, <LSITR2/400>
+LSITR2:	.BYTE	014, 377
+	ADDRBYTES LSITR2
 LSITL:	.BYTE	213, 214			; sit left (mirrored)
-LSITL2:	.BYTE	214, 377, <LSITL2&377>, <LSITL2/400>
+LSITL2:	.BYTE	214, 377
+	ADDRBYTES LSITL2
 
 ; Critical-hit stagger, ZX $CD34/$CD3B: hold the sit frame 3 beats then drop
 ; onto (and hold forever on) LA210's lying-down pose, frame 33.  ROBACTSTEP
 ; owns the real timing (ROBACT's countdown) -- this list is purely visual,
 ; same relationship LSITR/LSITL have to ordinary sitting.
 LSTAGR:	.BYTE	014, 014, 014
-LSTAGR2:	.BYTE	041, 377, <LSTAGR2&377>, <LSTAGR2/400>
+LSTAGR2:	.BYTE	041, 377
+	ADDRBYTES LSTAGR2
 LSTAGL:	.BYTE	214, 214, 214		; mirrored
-LSTAGL2:	.BYTE	241, 377, <LSTAGL2&377>, <LSTAGL2/400>
+LSTAGL2:	.BYTE	241, 377
+	ADDRBYTES LSTAGL2
 
 ; Stick-swing (pre-sword fire action), ZX $CCDF/$CCEA: 7-step lead-in, then
 ; hold the last frame -- RSSTICK's own SWINGCNT ends the swing, not this
 ; list running out (OBJSTEP has no "stop", only loop/hold).
 LSTICKR:	.BYTE	035, 035, 036, 036, 037, 037, 040
-LSTICKR2:	.BYTE	040, 377, <LSTICKR2&377>, <LSTICKR2/400>
+LSTICKR2:	.BYTE	040, 377
+	ADDRBYTES LSTICKR2
 LSTICKL:	.BYTE	235, 235, 236, 236, 237, 237, 240	; mirrored
-LSTICKL2:	.BYTE	240, 377, <LSTICKL2&377>, <LSTICKL2/400>
+LSTICKL2:	.BYTE	240, 377
+	ADDRBYTES LSTICKL2
 
 LRUNR:	.BYTE	014, 013			; run right: 2-frame lead-in...
 LRUNRL:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 010, 011, 377
-	.BYTE	<LRUNRL&377>, <LRUNRL/400>	; ...then loop the 000..011 cycle
+	ADDRBYTES LRUNRL			; ...then loop the 000..011 cycle
 LRUNL:	.BYTE	214, 213			; run left (mirrored)
 LRUNLL:	.BYTE	200, 201, 202, 203, 204, 205, 206, 207, 210, 211, 377
-	.BYTE	<LRUNLL&377>, <LRUNLL/400>
+	ADDRBYTES LRUNLL
 
 LRUNU:	.BYTE	017, 017, 020, 020, 377		; run up  (back view)
-	.BYTE	<LRUNU&377>, <LRUNU/400>
+	ADDRBYTES LRUNU
 LRUND:	.BYTE	015, 015, 016, 016, 377		; run down (front view)
-	.BYTE	<LRUND&377>, <LRUND/400>
+	ADDRBYTES LRUND
 
-LTURNL:	.BYTE	015, 377, <LRUNLL&377>, <LRUNLL/400>	; 1 lead-in, then run-left loop
-LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
+LTURNL:	.BYTE	015, 377			; 1 lead-in, then run-left loop
+	ADDRBYTES LRUNLL
+LTURNR:	.BYTE	015, 377
+	ADDRBYTES LRUNRL
 	.EVEN
 
 ; Guard frame lists, ZX $AC51-$AC7F.  Frames via L8DC4: $00-$07 walk right
@@ -132,17 +109,17 @@ LTURNR:	.BYTE	015, 377, <LRUNRL&377>, <LRUNRL/400>
 ; path.
 
 LAC51:	.BYTE	013, 012, 011, 010, 013, 012, 011, 010, 377	; backward walk
-	.BYTE	<LAC51&377>, <LAC51/400>
+	ADDRBYTES LAC51
 LAC5C:	.BYTE	000, 001, 002, 003, 004, 005, 006, 007, 377	; forward walk
-	.BYTE	<LAC5C&377>, <LAC5C/400>
-LAC67:	.BYTE	014, 377, <LAC5C&377>, <LAC5C/400>	; 1 turn frame, joins forward
-LAC6B:	.BYTE	014, 377, <LAC51&377>, <LAC51/400>	; 1 turn frame, joins backward
-LAC6F:	.BYTE	015, 015, 015, 377, <LAC5C&377>, <LAC5C/400>	; 3 turn frames,
-							; joins forward -- kneel/aim
-							; right ($AA31's $BF69 claim)
-LAC75:	.BYTE	016, 016, 016, 377, <LAC51&377>, <LAC51/400>	; 3 turn frames,
-							; joins backward -- kneel/aim
-							; left
+	ADDRBYTES LAC5C
+LAC67:	.BYTE	014, 377			; 1 turn frame, joins forward
+	ADDRBYTES LAC5C
+LAC6B:	.BYTE	014, 377			; 1 turn frame, joins backward
+	ADDRBYTES LAC51
+LAC6F:	.BYTE	015, 015, 015, 377		; 3 turn frames, joins forward --
+	ADDRBYTES LAC5C			; kneel/aim right ($AA31's $BF69 claim)
+LAC75:	.BYTE	016, 016, 016, 377		; 3 turn frames, joins backward --
+	ADDRBYTES LAC51				; kneel/aim left
 ;
 ; Death sequence, ZX $AC7B: 2 turn frames, then local frames $10-$12 (front/
 ; dying/dead -- LB9A36/LB9A56/LB9A76 via L8DC4), FF-terminated looping to its
@@ -151,7 +128,16 @@ LAC75:	.BYTE	016, 016, 016, 377, <LAC51&377>, <LAC51/400>	; 3 turn frames,
 ; already holds a corpse starts at LAC7F directly, showing the dead pose with
 ; no replay -- see ZX $AB42/$AB4A vs $C34A/$C276.
 LAC7B:	.BYTE	014, 014, 020, 021
-LAC7F:	.BYTE	022, 377, <LAC7F&377>, <LAC7F/400>
+LAC7F:	.BYTE	022, 377
+	ADDRBYTES LAC7F
+
+; Boar walk cycle, ZX $DD31/$DD38 -- plain 4-frame loop, no lead-in/turn/
+; death (unlike guards' richer $AC4A set).  Frames 020-023 normal, 220-223
+; mirrored (bit 7 set on every entry) -- L8DEA slots 16.-19./144.-147.
+LDD31:	.BYTE	020, 021, 022, 023, 377
+	ADDRBYTES LDD31
+LDD38:	.BYTE	220, 221, 222, 223, 377
+	ADDRBYTES LDD38
 
 	.EVEN
 

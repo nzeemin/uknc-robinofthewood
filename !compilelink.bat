@@ -18,13 +18,10 @@ echo 	.ASCII /REV.%REVISION% %DATESTAMP%/ > VERSIO.MAC
 @if exist ROBIN.SAV del ROBIN.SAV
 
 tools\macro11.exe ROBIN1.MAC -l ROBIN1.lst -o ROBIN1.obj -rt11 -se -fe -ysl 32
-if not errorlevel 1 (
-  echo ROBIN1 COMPILED SUCCESSFULLY
-) ELSE (
-  findstr /RC:"^[ABDEILMNOPQRTUZ] " ROBIN1.LST
-  echo ======= %errdet% =======
-  goto :Failed
-)
+if errorlevel 1 goto :Failed
+findstr /RC:"^[ABDEILMNOPQRTUZ\*] " ROBIN1.lst
+if %errorlevel%==0 goto :Failed
+echo ROBIN1 COMPILED SUCCESSFULLY
 
 tools\pclink11.exe /VERBOSITY:1 ROBIN1.obj /MAP /EXECUTE:ROBIN.SAV
 if errorlevel 1 (

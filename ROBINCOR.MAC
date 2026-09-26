@@ -8,7 +8,7 @@
 DBGNODAMAG = 1
 
 ; !!DEBUG!! uncomment + set to pin GAMEMAIN's starting room
-DBGINITROOM = ^X027
+DBGINITROOM = ^X100
 
 ; !!DEBUG!! 1 = show CURROOM as 3 hex digits, bottom-right of the HUD
 DBGSHOWROOM = 1
@@ -108,11 +108,7 @@ DRAWCELL:
 
 MARKDIRTY:
 	MOV	R1, R2
-	ASL	R2
-	ASL	R2
-	ASL	R2
-	ASL	R2
-	ASL	R2			; row * 32.
+	ASH	#5., R2			; row * 32.
 	ADD	R0, R2
 	MOVB	#1, DIRTYCELLS(R2)
 	RETURN
@@ -1733,11 +1729,7 @@ RAMPSTAMP:
 82$:	CMP	R1, SPRDR1
 	BGT	90$
 	MOV	R1, R2
-	ASL	R2
-	ASL	R2
-	ASL	R2
-	ASL	R2
-	ASL	R2			; row * 32.
+	ASH	#5., R2			; row * 32.
 	ADD	SPRDC0, R2
 	MOV	SPRDCN, R3
 84$:	MOVB	(R5), DIRTYCELLS(R2)	; the cell's colour, from the ramp
@@ -1874,17 +1866,15 @@ GSEEDINIT:
 GROUPADR:
 	MOV	CURROOM, R0
 	SUB	#32., R0
-	.REPT	4
+	.REPT	2
 	CLC
 	ROR	R0
-	.ENDR				; (room-32.) >> 4, logical
-	BIC	#^C3, R0		; & 3 -- group 0-3
+	.ENDR				; (room-32.) >> 2, logical
+	BIC	#^C14, R0		; bits 2-3 = group*4 directly, no separate
+					; >>4/&3/*4 -- the 2 low bits we ultimately
+					; want just land 2 bits higher this way
 	MOV	R0, R1
-	ASL	R0
-	ASL	R0
-	ASL	R0			; group * 8.
-	ASL	R1
-	ASL	R1			; group * 4.
+	ASL	R1			; group * 8.
 	ADD	R1, R0			; group * 12.
 	ADD	#GSEED, R0
 	RETURN
@@ -1896,17 +1886,14 @@ GROUPADR:
 ; R0, R1.
 GROUPADRLIVE:
 	MOV	CURROOM, R0
-	.REPT	4
-	CLC
-	ROR	R0
-	.ENDR				; room >> 4, logical
-	BIC	#^C3, R0		; & 3 -- group 0-3
+	ASR	R0
+	ASR	R0			; room >> 2 (CURROOM never negative, so
+					; arithmetic shift is fine here)
+	BIC	#^C14, R0		; bits 2-3 = group*4 directly, no separate
+					; >>4/&3/*4 -- the 2 low bits we ultimately
+					; want just land 2 bits higher this way
 	MOV	R0, R1
-	ASL	R0
-	ASL	R0
-	ASL	R0			; group * 8.
-	ASL	R1
-	ASL	R1			; group * 4.
+	ASL	R1			; group * 8.
 	ADD	R1, R0			; group * 12.
 	ADD	#GSEED, R0
 	RETURN
@@ -2366,6 +2353,276 @@ GUARDSTEP:
 	JMP	OBJSTEP
 
 ;------------------------------------------------------------------------------
+; Boar spawn on room entry, port of $DBF8's group-select feeding $C276-style
+; rebuild.  CURROOM row >= 16. (i.e. CURROOM >= 256.) is the only band with
+; boars; the group is (CURROOM>>4)-16., picking one of BOARROW16-19
+; (ROBINVAR.MAC).  Each of the 4 BOARTAB slots is cleared; a slot whose boar
+; is present this room (BPRESENT < 3) is marked active and given the walk
+; cycle matching its seed's byte 2 bit 7.
+;
+; Unlike GUARDINIT, this never touches byte 0/1 of the seed entries -- byte 1
+; is boar roaming's own live patrol cursor (BOARROW16-19's own header
+; comment), never reset here, matching the ZX's own no-reseed behaviour.
+;
+; Position (X/Y) is left at 0, same as GUARDINIT leaves a guard's real X to
+; GUARDSTEP's own Stage 6 -- boar roaming (the equivalent resolve step) isn't
+; ported yet, so a freshly spawned boar has no visible position or draw call
+; until that lands.  Rooms below CURROOM 256. never reach here.
+
+; Is the boar whose BOARROWxx entry is at R4 present in CURROOM?  Same shape
+; as GPRESENT: A = (home_column - room_column + 1) AND $0F, entry 0-2
+; present, >=3 absent.  Byte 0 is the seed's home-column field.
+; R0 := 0-2 (present) or >= 3 (absent).  Utilizes R0, R1.
+BPRESENT:
+	MOV	CURROOM, R0
+	BIC	#^C17, R0		; this room's column nibble
+	CLR	R1
+	BISB	(R4), R1		; the boar's home column (seed byte 0)
+	SUB	R0, R1			; home - room
+	INC	R1			; + 1
+	BIC	#^C17, R1		; AND $0F
+	MOV	R1, R0
+	RETURN
+
+BOARSPAWN:
+	MOV	CURROOM, R0
+	CMP	R0, #400		; CURROOM < 256. -- no boars in this room
+	BLO	90$
+	ASH	#-4., R0		; CURROOM >> 4 (CURROOM never negative, so
+					; arithmetic shift is fine here)
+	SUB	#16., R0		; - 16. => group 0-3 (row 16.-19.)
+	ASL	R0
+	ASL	R0			; group * 4.
+	MOV	R0, R1
+	ASL	R1			; group * 8.
+	ADD	R1, R0			; group * 12.
+	ADD	#BOARROW16, R0		; R0 -> this room's 4-entry seed group
+;
+	MOV	#4., R2			; 4 boar slots
+	MOV	R0, R3			; R3 -> this slot's seed entry
+	MOV	#BOARTAB, R5		; R5 -> its BOARTAB record
+10$:	MOV	R3, R4
+	CALL	BPRESENT
+	MOV	R0, R1			; GSPCLR clobbers R0 -- keep A in R1
+	MOV	R5, R4
+	CALL	GSPCLR
+	CMP	R1, #3
+	BHIS	12$			; not present this room -- leave it cleared
+	MOVB	#1, 4(R4)		; active only; boar roaming arms the first draw
+	BITB	#200, 2(R3)		; walk cycle from seed byte 2 bit 7,
+	BEQ	11$			; bit 6 synced to match (mirrors GUARDINIT's
+	MOV	#LDD38, 2(R4)		; own $C353-style facing-sync trick)
+	BISB	#100, 2(R3)
+	BR	12$
+11$:	MOV	#LDD31, 2(R4)
+	BICB	#100, 2(R3)
+12$:	ADD	#3, R3
+	ADD	#OBJSZ, R5
+	SOB	R2, 10$
+;
+; port of $C276's own 4 immediate boar-step calls, mirroring GUARDINIT's own
+; tail: resolves real X/visibility and draws before the room is shown.
+	CALL	BOARSTEP
+	CALL	BOARSTEP
+	CALL	BOARSTEP
+	BR	BOARSTEP
+90$:	RETURN
+
+;------------------------------------------------------------------------------
+; Boar movement -- the port of the ZX $DC00-$DD04 region.  A near-subset of
+; guard movement ($AA31 above): same 3-column presence window, same bit 6/7
+; direction-toggle, same cursor-wrap-carries-into-home-column mechanic, same
+; Stage 6 visibility/X resolve -- but no route-scan table (boars have no
+; $DEAB equivalent -- confirmed absent by direct trace), no shooting, and no
+; turn/death frames (LDD31/LDD38 are a plain 4-frame loop).
+;
+; Two differences from guards, both confirmed by the disasm session's trace:
+;   - the patrol cursor steps by 2, not 1 (still wraps at 112.)
+;   - facing always re-aims toward Robin's side on every successful reroll
+;     (~1-in-32 gate here, vs guards' ~1-in-16) -- this isn't a fallback like
+;     guards' route-scan-then-Robin-chase, it's the only mechanism, since
+;     there's no route table to consult first.
+;
+; Slot cycle, port of the ZX's own per-call counter (same shape as GSTEPIDX).
+
+BSTEPIDX:	.WORD	0		; which of the 4 boar slots is next, 0-3
+
+; Port of the ZX boar-movement block in full.  Utilizes R0-R5.
+BOARSTEP:
+	MOV	BSTEPIDX, R2		; 0-3 -- this call's boar slot
+	INC	BSTEPIDX
+	BIC	#^C3, BSTEPIDX		; wrap 0-3
+;
+	MOV	CURROOM, R0
+	CMP	R0, #400		; CURROOM < 256. -- no boars in this room; the
+	BHIS	1$			; group calc below would go negative and walk
+	RETURN				; off BOARROW16 into unrelated memory
+1$:
+;
+	MOV	R2, R3
+	ASL	R3
+	ADD	R2, R3			; R3 = idx * 3 -- BOARROWxx entry offset
+	MOV	CURROOM, R4
+	ASH	#-4., R4		; CURROOM >> 4 (CURROOM never negative, so
+					; arithmetic shift is fine here)
+	SUB	#16., R4		; - 16. => group 0-3 (row 16.-19.)
+	ASL	R4
+	ASL	R4			; group * 4.
+	MOV	R4, R1
+	ASL	R1			; group * 8.
+	ADD	R1, R4			; group * 12.
+	ADD	#BOARROW16, R4
+	ADD	R3, R4			; R4 -> this boar's BOARROWxx entry
+;
+	MOV	#BOARTAB, R5		; R5 -> this boar's BOARTAB record -- unlike
+	MOV	R2, R1			; OBJTAB, BOARTAB has no reserved slot 0 to
+	BEQ	7$			; skip (that's what GUARDSTEP's own INC R1 is
+6$:	ADD	#OBJSZ, R5		; for), so idx 0-3 maps straight to slot
+	SOB	R1, 6$			; offset idx*OBJSZ, 0 additions when idx=0
+7$:
+;
+	CALL	BPRESENT		; R4 already -> the BOARROWxx entry
+	CMP	R0, #3.
+	BHIS	40$			; not in one of the 3 live columns this frame
+;
+; direction re-aim -- always evaluated (no route table to try first), gated
+; by the ~1-in-32 roll (port of the AND $1F gate).  NOT a literal port of the
+; ZX calc itself: the disasm trace found "A = (RobinCol/4) + $1C - E", where E
+; comes from a $1C*row-distance byproduct the session flagged as dead/unused
+; -- the real formula's intent isn't fully pinned down.  This compares Robin's
+; and the boar's own X directly (same shape as guards' $AAAD-$AAD7 fallback
+; face-toward-Robin logic) to get the same "face whichever side Robin is on"
+; result; revisit if boar facing looks wrong against the real ZX.
+	CALL	PRNG
+	BIC	#^C37, R0		; port of the AND $1F facing-reroll gate
+	BNE	20$			; roll failed -- no re-aim this call, straight
+					; to the cursor step
+;
+	MOV	#ROBIN, R0
+	CLR	R1
+	BISB	6(R0), R1		; Robin's X, 2-pixel units
+	CLR	R0
+	BISB	9.(R5), R0		; boar's current X, 2-pixel units
+	CMP	R1, R0
+	BLO	15$			; Robin left of the boar -> face left (bit7=0)
+;
+	CLR	R1
+	BISB	2(R4), R1		; R1 = old byte2 -- port of the guard-style
+	MOV	R1, R3			; rotate-toggle: new bit6 := old bit7, new
+	BIC	#300, R1		; bit7 := set (facing right)
+	BIT	#200, R3
+	BEQ	14$
+	BIS	#100, R1
+14$:	BIS	#200, R1
+	MOVB	R1, 2(R4)
+	BR	20$
+15$:	CLR	R1
+	BISB	2(R4), R1		; same rotate-toggle, facing left (bit7=0)
+	MOV	R1, R3
+	BIC	#300, R1
+	BIT	#200, R3
+	BEQ	20$
+	BIS	#100, R1
+	MOVB	R1, 2(R4)
+;
+; patrol-cursor step, x2 stride, same wrap-carry shape as GUARDSTEP's 20$-35$.
+20$:	CLR	R0
+	BISB	2(R4), R0
+	BIT	#200, R0		; bit 7 set -> increment path
+	BNE	30$
+;
+	CLR	R1			; decrement path, step by 2
+	BISB	1(R4), R1
+	SUB	#2, R1
+	BGE	25$
+	ADD	#112., R1
+	CLR	R0
+	BISB	(R4), R0
+	DEC	R0
+	BIC	#^C17, R0
+	MOVB	R0, (R4)
+25$:	MOVB	R1, 1(R4)
+	BR	40$
+;
+30$:	CLR	R1			; increment path, step by 2
+	BISB	1(R4), R1
+	ADD	#2, R1
+	CMP	R1, #112.
+	BLT	35$
+	SUB	#112., R1
+	CLR	R0
+	BISB	(R4), R0
+	INC	R0
+	BIC	#^C17, R0
+	MOVB	R0, (R4)
+35$:	MOVB	R1, 1(R4)
+;
+; Stage 6 equivalent -- resolve screen X (and visibility) from the boar's
+; (possibly just-stepped) home column/patrol cursor, using a FRESH BPRESENT.
+; A=1 (home==room): X = cursor.  A=2 (home==room+1) with cursor<16.: X =
+; cursor+112.  Anything else: not visible this frame -- simulated but not
+; drawn, same as guards' port of $ABF0.
+40$:	CALL	BPRESENT		; R4 -> BOARROWxx entry still valid
+	CLR	R1
+	BISB	1(R4), R1		; patrol cursor
+	CMP	R0, #1
+	BEQ	41$
+	CMP	R0, #2
+	BEQ	56$
+	BR	70$
+56$:	CMP	R1, #16.
+	BLO	57$
+	BR	70$
+57$:	ADD	#112., R1
+41$:	MOVB	R1, 9.(R5)		; next X
+	MOVB	#96., 10.(R5)		; next Y -- fixed, ZX $DD05's own +0A ($60),
+					; 16. lower than guards' $50 -- confirmed via
+					; the disasm session's direct dump, not the
+					; same constant as guards despite both being
+					; fixed-forever, never-written values
+;
+; frame-select and drawn tail -- no turn/death state machine, just facing,
+; but still ported from $DCBF-$DCD9's own "bits 6-7 agree -> skip" gate:
+; reassigning the list every call (regardless of whether it changed) would
+; reset OBJSTEP's own frame-list cursor back to the list's first byte before
+; it ever gets a chance to walk through the other 3 -- exactly the "one
+; sprite frame only" bug.  Only touch 2(R5) when a facing change is actually
+; pending (bits 6/7 disagree), same shape as GUARDSTEP's own Stage 7a.
+	CLR	R3
+	BISB	2(R4), R3		; flags byte
+	MOV	R3, R0
+	BIC	#^C300, R0		; isolate bits 6-7
+	BEQ	60$			; 00 -- agree, list already synced
+	CMP	R0, #300
+	BEQ	60$			; 11 -- agree, list already synced
+	BIT	#200, R3		; disagree: pick the list from bit 7,
+	BEQ	42$			; sync bit 6 to match
+	MOV	#LDD38, 2(R5)
+	BISB	#100, 2(R4)
+	BR	60$
+42$:	MOV	#LDD31, 2(R5)
+	BICB	#100, 2(R4)
+;
+60$:	BISB	#4, 4(R5)		; arm step only; OBJSTEP's own step block
+					; arms the erase for next call
+	MOV	#L8DEA, R1		; boar frame base
+	MOV	R5, R4			; OBJSTEP takes the record in R4
+	JMP	OBJSTEP
+;
+; Not-drawn tail -- the animation still advances (OBJSTEP's own hold-counter/
+; cursor-walk), the list is set straight from bit 7, and any erase armed by
+; the last real draw still fires, same as guards' port of $ABF0.
+70$:	BITB	#200, 2(R4)
+	BEQ	71$
+	MOV	#LDD38, 2(R5)
+	BR	72$
+71$:	MOV	#LDD31, 2(R5)
+72$:	BICB	#4, 4(R5)		; suppress the draw
+	MOV	#L8DEA, R1
+	MOV	R5, R4
+	JMP	OBJSTEP
+
+;------------------------------------------------------------------------------
 ; Debug HUD: print CURROOM as 3 hex digits at the top-right of the play area
 ; (straight through PRINTSTR/TILBUF, same as the ornaments -- no shadow-screen
 ; or attribute-fallback involvement).  Call whenever CURROOM changes.
@@ -2524,6 +2781,7 @@ GAMEMAIN:
 	CALL	DRAWFRAME
 ;
 	CALL	GUARDINIT		; spawn this room's guards (ZX $C276)
+	CALL	BOARSPAWN		; spawn this room's boars (ZX $DBF8)
 ;
 GAMELOOP:
 	MOV	FRAMES, GAMEFRAME	; remember frame number
@@ -2535,6 +2793,7 @@ GAMELOOP:
 	CALL	OBJPICKUP		; erase any pickup Robin is standing on
 	CALL	ENTCHECK		; the Ent's weapon-purchase transaction
 	CALL	GUARDSTEP		; one guard's movement/animation this frame
+	CALL	BOARSTEP		; one boar's movement/animation this frame
 	CALL	PROJSTEP		; step + redraw all 4 arrow slots (ZX $BF8A)
 	CALL	ARROWHIT		; hurt Robin on a guard's-arrow hit (ZX $BDA3)
 	CALL	ROBACTSTEP		; advance the critical-hit stagger, if any
@@ -2671,7 +2930,9 @@ TOGGLECELL:
 	XOR	R3, R4
 	MOVB	R4, (R2)
 ; Mark the cell yellow on black -- port of $BD2A's $E500 write of $46
-	ASH	#-3., R1		; row * 32.
+	ASR	R1
+	ASR	R1
+	ASR	R1			; row * 32.
 	ADD	R0, R1			; + column
 	MOVB	#6, DIRTYCELLS(R1)	; put the yellow color
 	RETURN
@@ -3327,6 +3588,7 @@ ROOMEDGE:
 	CALL	ENTERROOM		; clears the shadow screen and redraws the room
 	CALL	GUARDROLL		; re-roll this room's guard seeds (ZX $C276)
 	CALL	GUARDINIT		; spawn this room's guards (ZX $C276)
+	CALL	BOARSPAWN		; spawn this room's boars (ZX $DBF8)
   .IF NE DBGSHOWROOM
 	CALL	DBGROOMDRAW		; room number, top-right of the play area
   .ENDC
